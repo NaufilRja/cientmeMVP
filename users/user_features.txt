@@ -1,0 +1,13 @@
+Signup / Login / Logout ✅
+
+Forgot / Reset Password ✅
+
+Profile endpoints (/me/, update profile) ✅
+
+Search (unified search for users + reels) ✅
+
+Follow / Unfollow (optional for MVP but good for engagement)
+
+View followers / following list (needed if follow system exists)
+
+Optional: change email/username, update avatar/bio

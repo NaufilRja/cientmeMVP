@@ -1,0 +1,303 @@
+# Factors — detailed (concise)
+
+Below are every factor we discussed, **what it means**, **how it affects reach**, **how to measure it**, and **suggested default weights / ranges** you can tune later.
+
+---
+
+## 1) Base Reach
+
+* **What:** `followers + initial_random`
+* **Why:** gives every reel a fair starting audience so new creators aren’t invisible.
+* **How measured:** `followers_count` + `randint(50, 500)`
+* **Effect:** additive (foundation of reach).
+* **Default:** `initial_random ∈ [50,500]`
+
+---
+
+## 2) Views (≥2s rule)
+
+* **What:** a “view” counts only if user watches ≥ 2 seconds.
+* **Why:** filters fast swipes from real watches.
+* **How measured:** count plays where `play_time >= 2s`, track total plays and unique viewers.
+* **Effect:** contributes to engagement; drives additional reach via `views_bonus`.
+* **Default handling:** clamp `views` considered to `<= base_reach * rewatch_cap` (rewatch\_cap ≈ 1.2–1.5).
+
+---
+
+## 3) Watch-time / Watch-ratio
+
+* **What:** `avg_watch_time / reel_duration` (0–1).
+* **Why:** quality signal — long watches are stronger than short ones.
+* **How measured:** average seconds watched per play divided by duration.
+* **Effect:** multiplies view contribution (time bonus) and increases cap\_mult.
+* **Default multiplier:** use `watch_bonus = views * watch_ratio * w_time` where `w_time ≈ 1–3`.
+
+---
+
+## 4) Likes
+
+* **What:** user taps like.
+* **Why:** light engagement; common but weaker than comment/share.
+* **How measured:** simple count.
+* **Effect:** additive bonus.
+* **Default weight:** `w_like ≈ 1.0–2.0` (use random small variation for organic feel).
+
+---
+
+## 5) Comments
+
+* **What:** comments on reel.
+* **Why:** stronger engagement (effortful), more signal than likes.
+* **How measured:** count top-level comments (and optionally replies separately).
+* **Effect:** additive with higher weight.
+* **Default weight:** `w_comment ≈ 2.5–4.0`
+
+---
+
+## 6) Reply Comments
+
+* **What:** replies to comments (deeper conversation).
+* **Why:** indicates community interaction and stickiness.
+* **How measured:** count replies (parented comments).
+* **Effect:** additive, stronger than comments.
+* **Default weight:** `w_reply ≈ 3.0–5.0`
+
+---
+
+## 7) Shares (internal vs external)
+
+* **What:** user shares inside the app (measurable) or outside (share event tracked).
+* **Why:** strongest signal of viral intent.
+* **How measured:** separate internal\_share\_count and external\_share\_events.
+* **Effect:** high additive bonus; internal shares may directly expand reach (send to sharer’s followers).
+* **Default weight:** `w_share_internal ≈ 5–8`, `w_share_external ≈ 2–4`
+
+---
+
+## 8) Saves / Bookmarks
+
+* **What:** user saves reel for later.
+* **Why:** very strong “I care” signal.
+* **How measured:** count saves.
+* **Effect:** additive; can increase cap\_mult.
+* **Default weight:** `w_save ≈ 4–7`
+
+---
+
+## 9) Profile visits / CTA taps
+
+* **What:** viewers click creator profile or CTA from reel.
+* **Why:** indicates high interest in creator/content.
+* **How measured:** track profile/tap events after reel.
+* **Effect:** additive, good multiplier on cap.
+* **Default weight:** `w_profile_visit ≈ 3–6`
+
+---
+
+## 10) Views rewatch factor & replay behavior
+
+* **What:** fraction of repeats per viewer.
+* **Why:** replays increase views but not reach; indicates loopability.
+* **How measured:** `rewatch_factor = total_plays / unique_viewers`
+* **Effect:** scale views contribution, but **cap** so replays don’t cause huge inflation.
+* **Default cap:** `rewatch_factor_max ≈ 1.2–1.5`
+
+---
+
+## 11) Engagement velocity (time window)
+
+* **What:** speed of engagement early after upload (first 30–60 min).
+* **Why:** quick early traction is a strong virality signal.
+* **How measured:** delta of likes/comments/views per minute in first window.
+* **Effect:** temporarily increases `cap_mult` or viral probability.
+* **Default:** higher weight if engagement\_rate in first 30m > threshold.
+
+---
+
+## 12) Completion rate (high-quality views)
+
+* **What:** percent of plays that complete ≥ X% (e.g., 50% or 90%).
+* **Why:** high completion = strong content retention.
+* **How measured:** track percent complete per play.
+* **Effect:** boosts `watch_ratio` and cap.
+* **Default handling:** if completion > 0.7 → extra `watch_bonus`.
+
+---
+
+## 13) Negative signals (skip/report)
+
+* **What:** skips, reports, “not interested”.
+* **Why:** reduce reach for bad or policy-violating content.
+* **How measured:** ratio of skip/quick-swipe and report counts.
+* **Effect:** multiplicative penalty on reach (e.g., `reach *= 0.6–0.95` depending severity).
+
+---
+
+## 14) Random luck (organic surprise)
+
+* **What:** small random boost to keep discovery exciting.
+* **Why:** helps new creators occasionally break through.
+* **How measured:** `random_boost = raw_increment * uniform(0.05, 0.20)` or small absolute random add.
+* **Effect:** additive multiplier; keep small (5–20%).
+
+---
+
+## 15) Cap & Dynamic cap\_mult
+
+* **What:** limits how much reach can multiply relative to base.
+* **Why:** prevent runaway domination while allowing growth.
+* **How measured:** `cap_mult` derived from engagement rate, watch-time, creator quality.
+* **Formula idea:** `cap_mult = 1 + clamp(eng_rate * scale, 0, max)`, or `cap = base_reach * random(1.5, 3.0)` tuned by engagement.
+* **Default:** scale ≈ 5–8, cap max ≈ 8–15 (start conservative).
+
+---
+
+## 16) Viral probability (engagement-based)
+
+* **What:** probability to apply a big temporary multiplier.
+* **Why:** lets very strong content “explode” occasionally.
+* **How measured:** `prob = base_prob + f(engagement)`; cap at e.g. 25%.
+* **Effect:** if triggered, multiply reach by `random(1.5–3.0)`.
+
+---
+
+## 17) Anti-fraud / throttles
+
+* **What:** protections vs bots, replay abuse, mass likes.
+* **Why:** engagement fraud ruins algorithm.
+* **Measures:** require watch-time thresholds for likes to count; rate-limit likes/shares; detect sudden burst patterns; verify users.
+* **Effect:** discounts fraudulent signals before they influence reach.
+
+---
+
+# How to combine (compact formula)
+
+1. `B = followers + randint(50,500)`
+2. `E = likes*w_like + comments*w_comment + replies*w_reply + shares*w_share + saves*w_save + profile_visits*w_profile`
+3. `time_bonus = views * watch_ratio * w_time`
+4. `views_bonus = min( views * rewatch_factor, B * views_cap_ratio ) * w_views`
+5. `raw_increment = E + time_bonus + views_bonus`
+6. `random_boost = raw_increment * uniform(0.05,0.20)`
+7. `raw_reach = B + raw_increment + random_boost`
+8. `cap_mult = 1 + clamp((E / max(1, views)) * scale, 0, max_cap)`
+9. `max_reach = B * cap_mult`
+10. `final_reach = min(raw_reach, max_reach)`
+11. `if random() < viral_prob(E): final_reach *= uniform(1.5, 3.0)`
+12. Apply negative penalties if reports/skip rate high.
+13. Compute `views = round(final_reach * watch_prob * rewatch_factor)` (ensure `views` consistent with `reach`).
+
+---
+
+# Suggested default parameters (starting point)
+
+* `initial_random = [50,500]`
+* `w_like = 1.5`, `w_comment = 3.0`, `w_reply = 4.0`, `w_share_internal = 6.0`, `w_save = 5.0`, `w_profile = 4.0`
+* `w_time = 2.0`, `w_views = 0.2`
+* `rewatch_factor ∈ [1.0, 1.4]`, views\_cap\_ratio = 1.5
+* `random_boost_range = [0.05, 0.20]`
+* `scale ≈ 5`, `max_cap ≈ 10`
+* `base_viral_prob = 0.03`, extra per 100 engagement ≈ 0.01, cap at 0.25
+
+(Tune these with real data.)
+
+---
+
+# Implementation notes (short)
+
+* **Recalc triggers:** on thresholds (e.g., +20 likes, +100 views) or periodic batch (every 5–15 min) — not on every DB write.
+* **Batch delivery:** show reel in rounds up to `final_reach` (so you can increase in later rounds).
+* **Store intermediate state:** keep `already_shown_count` so you don’t show same users repeatedly.
+* **Monitor metrics:** `views/reach`, `engagement_rate`, `viral_events`, `reports/false_positives`.
+* **Fraud:** require watch-time for likes to count; detect sock-puppet networks.
+
+---
+
+# Short example (one pass)
+
+* Followers 300, rand 200 → B=500
+* Likes=120, comments=40, replies=20, shares=10, saves=15, views=800, avg\_watch=9/15=0.6
+* E = 120*1.5 + 40*3 + 20*4 + 10*6 + 15\*5 = 180 + 120 + 80 + 60 + 75 = **515**
+* time\_bonus = 800*0.6*2 = **960**
+* views\_bonus = min(800*1.2, 500*1.5)\*0.2 ≈ min(960,750)*0.2 = 750*0.2 = **150**
+* raw\_increment = 515 + 960 + 150 = **1625**
+* random\_boost (\~12%) = 195
+* raw\_reach = 500 + 1625 +195 = **2320**
+* cap\_mult from engagement \~ `1 + (E/views)*5 = 1 + (515/800)*5 ≈ 4.22` → max\_reach=500\*4.22=2110
+* final\_reach = min(2320,2110) = **2110**
+* viral roll maybe doubles it if lucky.
+
+---
+
+If you want, I can now:
+
+* produce a compact **Python function** implementing this exact flow for testing, or
+* give a trimmed parameter set for safe production defaults.
+
+Which do you want next?
+
+
+Perfect catch 🙌 Yes, **Save feature** is also a strong engagement signal (on Instagram saves are even stronger than likes, because it means “I want to come back to this”).
+
+Let’s add it into your algorithm 👇
+
+---
+
+### 🔑 Finalized Reach Algorithm (MVP, Simple + Fair + Motivating)
+
+**1. Base Reach**
+
+```
+base_reach = followers + random(50, 500)
+```
+
+**2. Engagement Increment (dynamic weights)**
+
+```
+increment = (
+    likes * random(2, 4)
+    + comments * random(3, 5)
+    + replies * random(4, 6)
+    + shares * random(5, 8)
+    + saves * random(4, 7)   # NEW FACTOR
+    + views * dynamic_multiplier(0.1 → 0.5)
+    + watch_ratio * random(1, 2)
+)
+```
+
+**3. Random Boost (Luck Factor)**
+
+```
+random_boost = reach * random(0.05, 0.20)
+```
+
+**4. Final Reach**
+
+```
+final_reach = base_reach + increment + random_boost
+```
+
+---
+
+### ⚡ Example with Save
+
+* Followers = 200
+* Base reach = 200 + 300 = 500
+* Engagement:
+
+  * 100 likes → 250
+  * 50 comments → 200
+  * 20 replies → 100
+  * 10 shares → 70
+  * 15 saves → 90
+  * 600 views → 180
+  * Watch ratio \~0.8 → 60
+* **Increment ≈ 950**
+* Random boost \~200
+* ✅ Final Reach ≈ 1,650
+
+---
+
+👉 Now saves give a **real push** like shares.
+👉 Keeps algorithm **simple but motivating**.
+
+Do you want me to also **rank engagement weights** (like which is strongest: share > save > reply > comment > like > view) so you can tune them fairly?

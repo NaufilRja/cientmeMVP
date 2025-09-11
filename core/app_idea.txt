@@ -1,0 +1,137 @@
+Absolutely! Let’s organize **everything we’ve discussed** into a structured document so you can save it as your app’s idea and theory. I’ll include the **sharing & points system**, the **reel vitality/reach algorithm**, and the **user features** we discussed. I’ll keep it concise but complete.
+
+---
+
+# **CientMe App – Full Idea & Features**
+
+## **1. Users App**
+
+### **Core Features**
+
+* **Signup / Login / Logout / JWT Auth**
+* **Profile**
+
+  * Fields:
+
+    * `username`
+    * `name`
+    * `avatar`
+    * `bio`
+    * `website_link` (generic, optional)
+    * `QR_code_image` (optional)
+    * `followers` (ManyToMany, not showing who user follows to maintain privacy)
+    * `followers_count` (calculated dynamically)
+* **Follow / Unfollow System**
+
+  * Many-to-many relationship
+  * Allows following/unfollowing other users
+  * Only show **followers** list to users
+* **Change Password / Reset Password / Forget Password**
+* **Search Users**
+
+  * Search by username or name
+  * Returns minimal info like `id, username, name, avatar`
+* **Notifications**
+
+  * Follow/unfollow
+  * Like/reply/comment on reels
+* **Messaging**
+
+  * One-to-one system (like email)
+  * Users can send messages with text (QR can be optional in text)
+  * For reporting rewards from games or sharing issues
+
+---
+
+## **2. Reel App**
+
+### **Reel Features**
+
+* Short video (15 seconds max)
+* Video compression using `moviepy`
+* Thumbnail generation from video frame
+* Like system (ManyToMany)
+* Comment system
+
+  * Comments can have replies
+  * Likes on comments (including replies)
+* Reach & Vitality Algorithm (unique feature):
+
+  * **Base Reach:** `number of followers + random(50, 500)`
+  * **Increment Reach:** depends on:
+
+    * Likes (weighted)
+    * Comments (weighted)
+    * Reply comments (weighted)
+    * Views (dynamic multiplier based on watch time)
+    * Shares
+    * Reel duration (optional multiplier)
+  * **Random factor:** to prevent bias towards users with large followers
+  * **Final reach:** dynamic, fair, and motivating for users
+* **View counting**
+
+  * Only count if user watches > 2 seconds
+  * Views can affect increment reach dynamically
+
+### **Sharing & Points System**
+
+* Users can **share reels within app**
+
+  * Shared reels **don’t appear on sharer profile**
+  * Engagement (likes, comments, views, replies) from shares generate **points for sharer**
+* **Target system**
+
+  * Users accumulate points for sharing
+  * When target reached (e.g., 500 points), unlock **sharing badge/tick**
+  * Tick gives guaranteed reach for user’s future uploads (e.g., 5000–10000 users)
+* Original creator gets credit for engagement
+* Sharer gets **“sharing bonus points”**, encouraging participation
+
+---
+
+## **3. Engagement & Reach Algorithm**
+
+* **Factors influencing reach:**
+
+  * Followers
+  * Views (dynamic weight, can scale 1–1.5× base reach)
+  * Likes, comments, replies, shares (weighted and exponential growth for motivation)
+  * Random factor for fairness
+* **Principles:**
+
+  * Reach must be **motivating**, especially for beginners
+  * Avoid fixed caps; use **dynamic ranges** for increment reach
+  * Views counted if > 2 seconds
+  * Engagement multiplies dynamically rather than fixed percentages
+
+---
+
+## **4. MVP Focus & Philosophy**
+
+* Focus on **engagement and user motivation**, not external payments
+* Keep features **simple but gamified**
+* **Virtual rewards** only for MVP; no real payment initially
+* **Sharing and points system** incentivizes activity without cluttering profiles
+* Avoid **too much comparison between users** (e.g., showing following counts)
+* Keep **everything dynamic**, flexible, and motivating
+
+---
+
+## **5. Optional Future Features**
+
+* Collabs for sharing reels
+* Messaging for real rewards and reporting
+* Real rewards integration (optional, UPI or virtual currency)
+* Re-uploaded reels tracking and engagement points
+* Badges, levels, and achievements based on engagement
+
+---
+
+✅ **Summary:**
+CientMe is a social app focused on **short video reels**, **gamified sharing & engagement**, and **motivated reach algorithm**. Users are encouraged to create, share, and interact while keeping their profiles clean. The app differentiates from TikTok/Instagram by **rewarding sharers and small creators** and keeping engagement fair and dynamic.
+
+---
+
+If you want, I can **also make a visual diagram** showing **how reach, sharing points, and badges work together** for your MVP—it will be super useful to save as your blueprint.
+
+Do you want me to do that next?

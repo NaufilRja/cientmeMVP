@@ -22,7 +22,7 @@ urlpatterns = [
     path("", include(replies_router.urls)),
 
     # Hide Feature for Reel
-    path("hide/<int:reel_id>/", HideReelView.as_view(), name="hide-reel"),
+    path("reels/hide/<int:reel_id>/", HideReelView.as_view(), name="hide-reel"),
 
     # Report Feature for Reel
     path("reels/<int:reel_id>/report/", ReportReelView.as_view(), name="report-reel"),

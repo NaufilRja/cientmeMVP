@@ -44,7 +44,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'core',
     'users.apps.UsersConfig',
-    'reels',
+    'reels.apps.ReelsConfig',
     'games',
     
 ]
@@ -180,4 +180,9 @@ DEFAULT_FROM_EMAIL = 'noreply@example.com'
 
 
 
-TARGET_SHARE_POINTS = 10000  # Points needed to earn badge
+BADGE_TIERS = {
+    "silver": 10_000,       # first tier
+    "gold": 100_000,        # second tier
+    "platinum": 1_000_000,  # third tier
+    "cientium": 10_000_000  # fourth tier
+}

@@ -1,6 +1,6 @@
 from rest_framework import serializers 
 from users.serializers import SimpleUserSerializer, UserSerializer
-from .models import Reel, Comment, Share, Audio
+from .models import Reel, Comment, Share, Audio, Tag
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from rest_framework.exceptions import ValidationError
 
@@ -81,6 +81,15 @@ class CommentSerializer(serializers.ModelSerializer):
         return None
 
 
+# -----------------------
+# Tag Serializer
+# -----------------------
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ['id', 'name', 'slug']
+
+
 
 # -----------------------
 # Reel Serializer
@@ -100,12 +109,21 @@ class ReelSerializer(serializers.ModelSerializer):
     comments = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
     is_saved = serializers.SerializerMethodField()
+    
+    tags = TagSerializer(many=True, read_only=True)  # for read
+    tag_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Tag.objects.all(), many=True, write_only=True, source='tags'
+    )  # for write/update
+
 
     class Meta:
         model = Reel
         fields = [
             "id",
             "title",
+            'description', 
+            'tags', 
+            'tag_ids',
             "user",
             "video",
             "thumbnail",
@@ -191,19 +209,40 @@ class ReelSerializer(serializers.ModelSerializer):
 
         clip.close()
     
-    
+
+class ReelUpdateSerializer(serializers.ModelSerializer):
+    tags = TagSerializer(many=True, read_only=True)  # for reading tags
+    tag_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Tag.objects.all(), 
+        many=True, 
+        write_only=True, 
+        source="tags",
+        required=False 
+    )  
+
+    class Meta:
+        model = Reel
+        fields = ["title", "description", "thumbnail", "tags", "tag_ids"] # only safe fields
+        read_only_fields = ["video", "reach", "views", "likes", "shares", "is_banned"]    
+
+
 # -----------------------
 # Reel Share Serializer
 # -----------------------
 class ShareSerializer(serializers.ModelSerializer):
     sharer = UserSerializer(read_only=True)
-    
+
     class Meta:
         model = Share
-        fields = ["id", "reel", "sharer", "points_earned", "badge_earned", "target_reach", "created_at"]
-        read_only_fields = ["sharer", "points_earned", "badge_earned", "target_reach", "created_at"]
-        
-        
+        fields = [
+            "id", "reel", "sharer", "points_earned", "badge_earned",
+            "target_reach", "created_at"
+        ]
+        read_only_fields = [
+            "sharer", "points_earned", "badge_earned",
+            "target_reach", "created_at"
+        ]
+
      
      
 # -----------------------
@@ -224,3 +263,21 @@ class AudioSerializer(serializers.ModelSerializer):
         model = Audio
         fields = ["id", "title", "file", "duration", "is_from_reel", "reels_count", "created_by", "created_at"]
     
+
+
+# -----------------------
+# Reel Report Serializer
+# -----------------------      
+class ReelReportSerializer(serializers.Serializer):
+    REASONS = [
+        ("spam", "Spam"),
+        ("inappropriate", "Inappropriate content"),
+        ("sexual", "Sexual content"),
+        ("harassment", "Harassment or bullying"),
+        ("hate_speech", "Hate speech"),
+        ("other", "Other"),
+    ]
+    
+    reason = serializers.ChoiceField(choices=REASONS)
+    # Optional: for "Other" reason, allow extra text
+    other_text = serializers.CharField(required=False, allow_blank=True, max_length=255)    

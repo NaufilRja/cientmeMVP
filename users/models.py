@@ -187,6 +187,14 @@ class Profile(BaseModel):
         help_text="Users who follow this profile."
     )
 
+   
+    engaged_tags = models.ManyToManyField(
+        "reels.Tag",
+        blank=True,
+        related_name="engaged_by_profiles",
+        help_text="Tags the user interacts with or likes."
+    )
+
     # -----------------------
     # Hidden Reels (for Hide feature)
     # -----------------------
@@ -198,10 +206,22 @@ class Profile(BaseModel):
     )
     
     total_share_points = models.PositiveIntegerField(default=0)
-    badge_earned = models.BooleanField(default=False)
+    badge_type = models.CharField(
+        max_length=10,
+        choices=[("silver", "Silver"), ("gold", "Gold"), ("black", "Black")],
+        null=True,
+        blank=True
+    )
+
 
     # store badge display info
     badge_name = models.CharField(max_length=50, default="Blue Tick")
+    
+    # -----------------------
+    # TOTAL REACH FIELD
+    # -----------------------
+    total_reach = models.PositiveIntegerField(default=0, help_text="Sum of reach from all user's reels.")
+
     
     def __str__(self):
         """
@@ -214,3 +234,14 @@ class Profile(BaseModel):
     def followers_count(self):
         """Dynamic followers count."""
         return self.followers.count()
+    
+    
+    # -----------------------
+    # TOTAL REACH
+    # -----------------------
+    def recompute_total_reach(self):
+        """Recalculate and update total reach from user's reels."""
+        total = Reel.objects.filter(user=self.user).aggregate(total=models.Sum("reach"))["total"] or 0
+        self.total_reach = total
+        self.save(update_fields=["total_reach"])
+        return self.total_reach

@@ -25,10 +25,16 @@ class ProfileAdmin(admin.ModelAdmin):
         'bio',
         'followers_count',
         'total_share_points',
-        'badge_earned',
-        'badge_name'
+        'total_reach',
+        'badge_type',
+        'badge_name',
     )
     list_display_links = ('id', 'user')
-    search_fields = ('user__username', 'bio')
-    list_filter = ('user__is_active', 'badge_earned')
-    readonly_fields = ('followers_count', 'total_share_points', 'badge_earned')
+    search_fields = ('user__username', 'bio', 'user__email')  # added email for search convenience
+    list_filter = ('user__is_active', 'badge_type')
+    readonly_fields = (
+        'followers_count',
+        'total_share_points',
+        'total_reach',
+        'badge_type',
+    )

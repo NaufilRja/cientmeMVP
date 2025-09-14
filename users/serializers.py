@@ -30,32 +30,48 @@ class ProfileSerializer(serializers.ModelSerializer):
    # Show followers as list of usernames
     followers = serializers.SerializerMethodField()
     
+     # Show engaged tags as list of tag names (new addition)
+    engaged_tags = serializers.SerializerMethodField()
+    
+    # Hidden reels IDs (optional, already in model)
+    hidden_reels = serializers.PrimaryKeyRelatedField(
+        many=True,
+        read_only=True
+    )
+    
     class Meta:
         model = Profile
         fields = [
             'id',  
             'user', 
             "total_share_points",
-            "badge_earned",
+            "badge_type",  
             "badge_name",        
             'avatar',
             'bio',
             'generic_link',
             'qr_code',
             'followers',       # List of follower user IDs
-            'followers_count', # Dynamic number of followers
+            'followers_count',
+            'engaged_tags',   
             'hidden_reels',
-            'created_at',    # match BaseModel
+            'total_reach', 
+            'created_at',   # match BaseModel
             'updated_at',
         ]
         
         read_only_fields = [
-            'id',
+           'id',
             'user',  # ensure it's read-only
             'followers',
             'followers_count',
-            'date_created',
-            'date_updated',
+            'total_share_points',
+            'badge_type',
+            'badge_name',
+            'total_reach',
+            'hidden_reels',
+            'created_at',
+            'updated_at',
         ]
     
     
@@ -64,6 +80,9 @@ class ProfileSerializer(serializers.ModelSerializer):
         return [user.username for user in obj.followers.all()]
 
 
+    def get_engaged_tags(self, obj):
+        """Return list of engaged tag names."""
+        return [tag.name for tag in obj.engaged_tags.all()]  # assumes Tag model has 'name' field
 
 
 # -----------------------

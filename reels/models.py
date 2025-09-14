@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils.text import slugify
 from django.conf import settings
 from core.models.base import BaseModel
 from core.utils.upload_paths import reel_upload_to, reel_thumbnail_upload_to
@@ -11,6 +12,23 @@ import numpy as np
 
 
 User = settings.AUTH_USER_MODEL
+
+
+# -----------------------
+# Tag Model
+# -----------------------
+class Tag(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    slug = models.SlugField(max_length=50, unique=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
 
 
 
@@ -71,6 +89,21 @@ class Reel(BaseModel):
         null=True,
         blank=True,
         related_name="reels"
+    )
+    
+    
+    
+    description = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Optional description of the reel"
+    )
+
+    tags = models.ManyToManyField(
+        Tag,
+        blank=True,
+        related_name="reels",
+        help_text="Optional hashtags for this reel"
     )
     
 
@@ -147,31 +180,48 @@ class Reel(BaseModel):
     # -----------------------
     def save(self, *args, **kwargs):
         """
-        Compress video and generate thumbnail after saving instance.
+        Compress video and generate thumbnail only when video is first uploaded
+        or updated. Skip during simple field updates (like shares, likes, etc.).
         """
+        update_fields = kwargs.get("update_fields", None)
+
         super().save(*args, **kwargs)
 
-        if self.video:
-            self._compress_video()
-        if self.video and not self.thumbnail:
-            self._generate_thumbnail()
-            
-   
+            # Run compression only if video was added/changed
+        if not self.pk or (update_fields and "video" in update_fields):
+            if self.video and hasattr(self.video, "path") and os.path.exists(self.video.path):
+                self._compress_video()
+                # regenerate thumbnail if missing
+                if not self.thumbnail:
+                    self._generate_thumbnail()
+                    
+
     def _compress_video(self):
-        """Compress video file using moviepy."""
-        input_path = self.video.path
-        clip = VideoFileClip(input_path)
+        """Compress video file using moviepy, safe version."""
+        input_path = self.video.path if self.video else None
+        if not input_path or not os.path.exists(input_path):
+            return  # skip if missing file
 
         output_path = f"{os.path.splitext(input_path)[0]}_compressed.mp4"
-        clip.write_videofile(
-        output_path,
-        codec="libx264",
-        audio_codec="aac",
-        preset="ultrafast"
-    )
-        clip.close()
 
-        self.video.name = os.path.relpath(output_path, settings.MEDIA_ROOT)
+        try:
+            clip = VideoFileClip(input_path)
+            clip.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                preset="ultrafast",
+                threads=2,  # safer for dev
+                logger=None  # suppress noisy ffmpeg logs
+            )
+            clip.close()
+
+            # Update model field
+            self.video.name = os.path.relpath(output_path, settings.MEDIA_ROOT)
+            super().save(update_fields=["video"])  # save updated video field only
+        except Exception as e:
+            # Don’t crash the app if ffmpeg fails
+            print(f"Video compression failed: {e}")
 
     def _generate_thumbnail(self):
         """Generate thumbnail from first frame of video."""

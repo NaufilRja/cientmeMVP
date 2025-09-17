@@ -6,6 +6,8 @@ from django.conf import settings
 from datetime import timedelta, datetime, timezone as dt_timezone
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
+from moviepy.editor import VideoFileClip
+import os, uuid
 
 
 from core.utils.feed import get_user_feed
@@ -23,7 +25,8 @@ from .serializers import(
 ReelSerializer, 
 CommentSerializer, 
 ReelReportSerializer, 
-ReelUpdateSerializer 
+ReelUpdateSerializer,
+AudioSerializer 
 )
 
 from core.utils.engagement import (
@@ -36,13 +39,90 @@ from core.constants import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
 
 
-# -----------------------
-# Pagination Class
-# -----------------------
-class ReelPagination(LimitOffsetPagination):
-    default_limit = DEFAULT_PAGE_SIZE
-    max_limit = MAX_PAGE_SIZE
 
+
+# -----------------------
+# Helper functions for Feed
+# -----------------------
+# (1️) Get fresh/random reels for discovery
+def get_fresh_feed(user, limit=20):
+    """
+    Return a list of fresh reels for the user to discover.
+    - Excludes reels uploaded by the current user
+    - Orders by creation date (newest first)
+    - Can be later extended to include viral boost for new users
+    """
+    return Reel.objects.exclude(user=user).order_by('-created_at')[:limit]
+
+
+# (2️) Get reels from people the user follows
+def get_following_feed(user, following_ids, limit=20):
+    """
+    Return reels uploaded by the users that the current user follows.
+    - Priority feed for social engagement
+    - Ordered by creation date (most recent first)
+    """
+    if not following_ids:
+        return []  # if user follows no one, return empty
+    return Reel.objects.filter(user__id__in=following_ids).order_by('-created_at')[:limit]
+
+
+# (3) Get current seasonal/event keywords
+def get_current_season_keywords():
+    """
+    Return list of current seasonal/event keywords for boosting relevant reels.
+    - Can be used in feed scoring
+    - Example: festive season, holidays, morning/evening activities
+    """
+    month = datetime.now().month
+    if month in [11, 12]:
+        return ['diwali', 'christmas', 'new year']  # winter festivals
+    elif month in [6, 7, 8]:
+        return ['summer', 'vacation', 'holidays']  # summer season
+    elif month in [3, 4]:
+        return ['spring', 'holi']  # spring season
+    else:
+        return []  # default, no special season
+
+
+
+
+# -----------------------
+# Helper function for reel audio
+# -----------------------
+def extract_audio_from_reel(reel_instance):
+    """Extract audio from reel video and link to Audio model i  not     already linked."""
+    if reel_instance.audio or not reel_instance.video:
+        return None  # already has audio or no video
+
+    video_path = reel_instance.video.path
+    clip = VideoFileClip(video_path)
+
+    # Generate a temp audio file
+    audio_filename = f"{uuid.uuid4()}.mp3"
+    audio_path = os.path.join("media/reel_audio/", audio_filename)
+
+    # Make sure the directory exists
+    os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+
+    # Extract audio
+    clip.audio.write_audiofile(audio_path)
+
+    # Create Audio object
+    audio = Audio.objects.create(
+        title=f"Audio from Reel {reel_instance.id}",
+        file=f"reel_audio/{audio_filename}",
+        duration=clip.duration,
+        created_by=reel_instance.user,
+        is_from_reel=True
+    )
+
+    # Link reel to this audio
+    reel_instance.audio = audio
+    reel_instance.save(update_fields=["audio"])
+
+    return audio
+    
 
 
 # -----------------------
@@ -71,59 +151,88 @@ class ReelViewSet(OwnerActionsMixin, ActionResponseMixin, viewsets.ModelViewSet)
 
 
 
+
     # -----------------------
     # Custom actions
     # -----------------------
-    @action(detail=False, methods=["get"], url_path="feed", permission_classes=[permissions.IsAuthenticated])
+    @action(detail=False, methods=["get"], url_path="feed",     permission_classes=[permissions.IsAuthenticated])
     def feed(self, request):
         """
-        Return reels for feed, combining:
+        Return reels for feed with a hybrid approach:
         - 70% personalized (tags/engagement)
-        - 20% fresh/random
+        - 20% fresh/new reels
         - 10% social boost (following)
-        Then scored & paginated.
+        Then scored & sliced using cursor-based pagination.
         """
         user = request.user
-        following_ids = user.following_profiles.values_list("id",   flat=True)
-        hidden_ids = user.profile.hidden_reels.values_list('id', flat=True)
+        following_ids = list(user.following_profiles.values_list("id",  flat=True))
+        hidden_ids = list(user.profile.hidden_reels.values_list('id',   flat=True))
 
-        # -----------------------
-        # Step 1: Get hybrid feed list (core/utils/feed.py)
-        # -----------------------
-        
-        raw_feed = get_user_feed(user, limit=100)  # get more, will     paginate later
+        # Step 1: Get reels for each category
+        personalized_feed = get_user_feed(user, limit=70)   # personalized  based on tags/engagement
+        fresh_feed = get_fresh_feed(user, limit=20)               # new/unseen    reels
+        social_feed = get_following_feed(user, following_ids, limit=10)
+        # reels  from followed users
 
-        # -----------------------
+        # Combine all feeds
+        combined_feed = list(personalized_feed) + list(fresh_feed) + list   (social_feed)
+
+        # Remove hidden reels
+        combined_feed = [r for r in combined_feed if r.id not in    hidden_ids]
+
+        # Remove duplicates by ID
+        seen_ids = set()
+        unique_feed = []
+        for reel in combined_feed:
+            if reel.id not in seen_ids:
+                unique_feed.append(reel)
+                seen_ids.add(reel.id)
+
+        combined_feed = unique_feed
+
         # Step 2: Calculate score for each reel
-        # -----------------------
         scored_reels = [
-            (reel, calculate_feed_score(reel, user, following_ids))
-            for reel in raw_feed
-            if reel.id not in user.profile.hidden_reels.values_list('id', flat=True)
+            (reel, calculate_feed_score(
+                reel,
+                user,
+                following_ids=following_ids,
+                season_keywords=get_current_season_keywords()  # optional seasonal keywords
+            ))
+            for reel in combined_feed
         ]
 
-        # -----------------------
         # Step 3: Sort by score
-        # -----------------------
         scored_reels.sort(key=lambda x: x[1], reverse=True)
 
-        # -----------------------
-        # Step 4: Paginate
-        # -----------------------
-        paginator = ReelPagination()
-        paginated_reels = paginator.paginate_queryset(
-            [reel for reel, _ in scored_reels], request
-        )
+        # ------------------------
+        # Step 4: Cursor-based slicing (after sorting)
+        # ------------------------
+        last_reel_id = request.GET.get("last_reel_id")
+        if last_reel_id:
+            try:
+                # find index of last reel in scored_reels
+                last_index = next(i for i, (r, _) in enumerate(scored_reels)        if r.id == int(last_reel_id))
+                scored_reels = scored_reels[last_index + 1:]  # next page
+            except StopIteration:
+                scored_reels = scored_reels  # last_id not found, return first page
 
-        # -----------------------
+        limit = int(request.GET.get("limit", 20))
+        reels_list = [reel for reel, _ in scored_reels]
+        paginated_reels = reels_list[:limit]
+
+
         # Step 5: Serialize
-        # -----------------------
-        top_reels = [self.serialize_reel_with_counts(reel, request) for     reel in paginated_reels]
-
-        # -----------------------
-        # Step 6: Response
-        # -----------------------
-        return paginator.get_paginated_response(top_reels)
+        top_reels = [self.serialize_reel_with_counts(reel, request) for reel        in paginated_reels]
+        
+        
+        
+        # Step 6: Response with last_id for frontend cursor
+        last_id = top_reels[-1]["id"] if top_reels else None
+        return Response({
+                "results": top_reels,
+                "last_id": last_id,   # 👈 this is the cursor for the next page
+                "count": len(top_reels)
+            })
 
 
 
@@ -149,7 +258,7 @@ class ReelViewSet(OwnerActionsMixin, ActionResponseMixin, viewsets.ModelViewSet)
     # Save / Unsave
     # -----------------------
     @action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
-    def save(self, request, pk=None):
+    def saved(self, request, pk=None):
         """Toggle save/unsave on a reel."""
         reel = self.get_object()
         user = request.user
@@ -331,7 +440,7 @@ class ReelViewSet(OwnerActionsMixin, ActionResponseMixin, viewsets.ModelViewSet)
         reel = self.get_object()
 
         reel.views += 1
-        reel.reach = calculate_reel_reach(reel, reel.user.followers.count())
+        reel.reach = calculate_reel_reach(reel, reel.user.profile.followers.count())
         reel.save(update_fields=["views", "reach"])
 
         return self.success({"views": reel.views, "reach": reel.reach})
@@ -374,6 +483,7 @@ class ReelViewSet(OwnerActionsMixin, ActionResponseMixin, viewsets.ModelViewSet)
 
     
     
+    
     # -----------------------
     # Create Reel
     # -----------------------
@@ -409,8 +519,14 @@ class ReelViewSet(OwnerActionsMixin, ActionResponseMixin, viewsets.ModelViewSet)
         ) or 0
         reel.save(update_fields=["reach"])
         
+        # Extract audio from video
+        extract_audio_from_reel(reel)
         
+        
+     
+    # -----------------------
     # custom delete
+    # -----------------------   
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         self.perform_destroy(instance)
@@ -439,7 +555,12 @@ class CommentViewSet(OwnerActionsMixin, viewsets.ModelViewSet):
             qs = qs.filter(parent__isnull=True)
 
         return qs.select_related("user").prefetch_related("likes", "replies")
+    
+    
 
+    # -----------------------
+    # Create a comment or a reply
+    # -----------------------
     def perform_create(self, serializer):
         reel_id = self.kwargs.get("reel_pk") or self.request.data.get("reel_id")
         parent_id = self.request.data.get("parent_id") or self.kwargs.get("comment_pk")
@@ -451,7 +572,12 @@ class CommentViewSet(OwnerActionsMixin, viewsets.ModelViewSet):
             parent = Comment.objects.get(id=parent_id)
 
         serializer.save(user=self.request.user, reel_id=reel_id, parent=parent)
-
+        
+        
+        
+    # -----------------------
+    #  like Comment and like replies 
+    # -----------------------   
     @action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
     def like(self, request, reel_pk=None, comment_pk=None, pk=None):
         """
@@ -477,22 +603,44 @@ class CommentViewSet(OwnerActionsMixin, viewsets.ModelViewSet):
             liked = True
 
         return Response({"liked": liked, "likes_count": obj.likes.count()})
-
+    
+    
+    # -----------------------
+    # Get all replies for a comment
+    # -----------------------
     @action(detail=True, methods=["get"], permission_classes=[permissions.IsAuthenticated])
-    def replies(self, request, pk=None, reel_pk=None):
+    def replies(self, request, reel_pk=None, pk=None):
         """
-        Lazy fetch all replies for a comment (pagination supported)
+        Fetch all replies for a comment (pagination supported)
         """
-        comment = self.get_object()
+        try:
+            comment = Comment.objects.get(pk=pk)
+        except Comment.DoesNotExist:
+            return Response({"detail": "Comment not found."}, status=404)
+
         qs = comment.replies.select_related("user").prefetch_related("likes").all()
         page = self.paginate_queryset(qs)
         if page is not None:
-            serializer = CommentSerializer(page, many=True, context=self.get_serializer_context())
+            serializer = CommentSerializer(page, many=True, context=self.   get_serializer_context())
             return self.get_paginated_response(serializer.data)
 
-        serializer = CommentSerializer(qs, many=True, context=self.get_serializer_context())
+        serializer = CommentSerializer(qs, many=True, context=self. get_serializer_context())
         return Response(serializer.data)
-
+    
+    
+    # -----------------------
+    # Add a reply (POST)
+    # -----------------------
+    @action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
+    def add_reply(self, request, reel_pk=None, pk=None):
+        parent_comment = get_object_or_404(Comment, pk=pk)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user, reel_id=parent_comment.reel.id, parent=parent_comment)
+        return Response(serializer.data, status=201)
+    
+    
+    # perform update method
     def perform_update(self, serializer):
         comment = self.get_object()
         if comment.is_deleted:

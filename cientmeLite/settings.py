@@ -150,6 +150,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10,  # number of items per page
 }
 
 
@@ -186,3 +189,6 @@ BADGE_TIERS = {
     "platinum": 1_000_000,  # third tier
     "cientium": 10_000_000  # fourth tier
 }
+
+
+BASE_URL = "http://127.0.0.1:8000"

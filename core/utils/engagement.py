@@ -115,14 +115,17 @@ def calculate_reel_reach(reel, followers_count, badge_min_reach=None):
     )
 
     # Small random boost
-    random_boost = engagement_reach * random.uniform(0.05, 0.2)
+    if engagement_reach > 0:
+        random_boost = engagement_reach * random.uniform(0.05, 0.2)
+    else:
+        random_boost = 0
 
     total_reach_before_cap = initial_reach + engagement_reach + random_boost
 
     # ----------------------
     # Step 3: Cap based on engagement rate
     # ----------------------
-    engagement_rate = engagement_reach / max(1, views)
+    engagement_rate = engagement_reach / max(1, reel.views + 1)
     cap_mult = 1 + min(engagement_rate * 5, 10)
     max_reach = initial_reach * cap_mult
 
@@ -131,9 +134,10 @@ def calculate_reel_reach(reel, followers_count, badge_min_reach=None):
     # ----------------------
     # Step 4: Viral chance
     # ----------------------
-    viral_chance = 0.03 + (engagement_reach / 100) * 0.01
-    if random.random() < min(viral_chance, 0.25):
-        final_total_reach *= random.uniform(1.5, 3.0)
+    if engagement_reach > 10:
+        viral_chance = 0.03 + (engagement_reach / 100) * 0.01
+        if random.random() < min(viral_chance, 0.25):
+            final_total_reach *= random.uniform(1.5, 3.0)
 
     # ----------------------
     # Step 5: Badge guarantee
@@ -149,40 +153,93 @@ def calculate_reel_reach(reel, followers_count, badge_min_reach=None):
     return round(final_total_reach)
 
 
+
+
 # -----------------------
-# Feed Score Calculation
+# Reel Feed Calculation
 # -----------------------
-def calculate_feed_score(reel, user, following_ids=None):
+def calculate_feed_score(reel, user, following_ids=None, season_keywords=None):
     """
-    Calculate a feed score for a reel for sorting the feed.
-
-    Score is based on:
-        - Whether the reel owner is followed
-        - Likes, comments, shares
-        - Recency decay (older reels score less)
-
+    Calculate feed score for a reel, balancing:
+        - Followers priority
+        - Engagement
+        - Fresh/new creators
+        - Seasonal/time-of-day relevance
+        - Viral boost (chance for new or under-the-radar reels)
+    
     Args:
         reel: Reel instance
         user: Current user viewing the feed
-        following_ids: List of user IDs that the current user follows
+        following_ids: List of user IDs current user follows
+        season_keywords: list of keywords relevant to current season/event
 
     Returns:
-        float: Feed score for ranking
+        float: final feed score
     """
     following_ids = following_ids or []
     score = 0
 
-    # Bonus if the reel owner is followed
+    # ----------------------
+    # 1. Personalization: Followers & new creators
+    # ----------------------
     if reel.user.id in following_ids:
-        score += 50
+        score += 200  # strong weight for followed creators
+    else:
+        # Give smaller boost for new/less-followed creators
+        if reel.user.profile.followers.count() < 50:  # threshold for new creators
+            score += 50  # chance for new users to appear
 
-    # Engagement contributions
+    # ----------------------
+    # 2. Engagement contributions
+    # ----------------------
     score += reel.likes.count() * 2
-    score += reel.comments.count() * 3
-    score += reel.shares * 5
+    score += reel.comments.filter(parent__isnull=True).count() * 3   # top-level comments
+    score += reel.comments.exclude(parent__isnull=True).count() * 2   # replies
+    score += reel.shares * 8
+    score += reel.saves.count() * 4
+    score += reel.views * 0.5
 
-    # Recency decay
+    # Include share points
+    score += calculate_share_points(reel)
+
+    # ----------------------
+    # 3. Recency decay
+    # ----------------------
     hours_old = (timezone.now() - reel.created_at).total_seconds() / 3600
     score -= hours_old
+
+    # ----------------------
+    # 4. Seasonal relevance
+    # ----------------------
+    if season_keywords:
+        for keyword in season_keywords:
+            if keyword.lower() in reel.caption.lower():
+                score += 50  # additive boost instead of multiplicative
+                break
+
+    # ----------------------
+    # 5. Time-of-day relevance (morning/evening)
+    # ----------------------
+    hour = timezone.now().hour
+    if 7 <= hour < 10:
+        score += 20  # morning boost
+    elif 19 <= hour < 23:
+        score += 40  # evening peak
+    elif 0 <= hour < 5:
+        score -= 20  # late night reduction
+
+    # ----------------------
+    # 6. Viral/fresh chance for new users
+    # ----------------------
+    # 10% chance for a new or low-engagement reel to get boosted
+    if reel.user.profile.followers.count() < 50 or reel.views < 100:
+        if random.random() < 0.1:
+            score *= random.uniform(1.5, 2.0)  # temporary boost
+
+    # ----------------------
+    # 7. Cap final score to prevent one reel dominating
+    # ----------------------
+    MAX_SCORE = 1000
+    score = min(score, MAX_SCORE)
 
     return round(score, 2)

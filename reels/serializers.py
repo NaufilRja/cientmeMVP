@@ -1,13 +1,24 @@
 from rest_framework import serializers 
 from users.serializers import SimpleUserSerializer, UserSerializer
 from .models import Reel, Comment, Share, Audio, Tag
-from moviepy.video.io.VideoFileClip import VideoFileClip
-from rest_framework.exceptions import ValidationError
+from moviepy.editor import VideoFileClip
+from core.constants import MAX_VIDEO_SIZE_MB, MAX_DURATION_SEC
+from django.core.exceptions import ValidationError
+
 
 import os
+import tempfile
+from django.core.files import File
+from PIL import Image 
+
 from django.contrib.auth import get_user_model
 User = get_user_model()
 
+
+
+# Ensure compatibility with latest Pillow
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.Resampling.LANCZOS
 
 
 
@@ -126,6 +137,8 @@ class ReelSerializer(serializers.ModelSerializer):
             'tag_ids',
             "user",
             "video",
+            "video_size_mb",
+            "video_duration",
             "thumbnail",
             "audio",
             "likes_count",
@@ -143,6 +156,8 @@ class ReelSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "user",
+            "video_size_mb",
+            "video_duration",
             "thumbnail",
             "likes_count",
             "saves_count",
@@ -190,26 +205,77 @@ class ReelSerializer(serializers.ModelSerializer):
         return CommentSerializer(comments, many=True, context=self.context).data
     
     
-    def _validate_video_duration(self):
-        """Check that video duration does not exceed 15 seconds."""
-        video_path = self.video.path
+    def validate_video(self, value):
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as    tmp_file:
+            for chunk in value.chunks():
+                tmp_file.write(chunk)
+            tmp_path = tmp_file.name
 
-        clip = None
         try:
-            clip = VideoFileClip(video_path)
+            clip = VideoFileClip(tmp_path)
         except Exception as e:
-            raise ValidationError({"video": f"Cannot read video file: {str(e)}"})
+            raise serializers.ValidationError(f"Cannot read video file: {str(e)}")
 
-        if clip.duration > 15:
-            clip.close()
-            # Optionally delete the file
-            if os.path.exists(video_path):
-                os.remove(video_path)
-            raise ValidationError({"video": "Video cannot exceed 15 seconds."})
+        # Trim and compress
+        trimmed_path = tmp_path + "_processed.mp4"
 
+        # Resize to 720p max height if needed
+        clip_resized = clip.resize(height=720) if clip.h > 720 else clip
+
+        # Cut duration to MAX_DURATION_SEC
+        clip_final = clip_resized.subclip(0, min(clip.duration, MAX_DURATION_SEC))
+
+        # Write processed video
+        clip_final.write_videofile(
+            trimmed_path,
+            codec="libx264",
+            audio_codec="aac",
+            preset="fast",
+            bitrate="5000k",  # compress to reduce size
+            threads=2,
+            logger=None
+        )
+
+        # Close clips
         clip.close()
-    
+        clip_final.close()
 
+        # Replace original file in the serializer
+        value.file.close()
+        value.file = open(trimmed_path, "rb")
+        value.file = File(value.file)
+
+        # Check final size
+        if value.file.size > MAX_VIDEO_SIZE_MB * 1024 * 1024:
+            raise serializers.ValidationError(
+                f"File too large. Max {MAX_VIDEO_SIZE_MB} MB allowed."
+        )
+
+        # Save duration and size in a temporary attribute for later use
+        value._processed_duration = min(clip.duration, MAX_DURATION_SEC)
+        value._processed_size_mb = round(os.path.getsize(trimmed_path) /    (1024 * 1024), 2)
+
+        return value
+    
+    
+    def create(self, validated_data):
+        video_file = validated_data.get('video')
+        reel = super().create(validated_data)
+
+        if video_file:
+            # Update duration and size using the temporary attributes
+            reel.video_duration = getattr(video_file, "_processed_duration", 0)
+            reel.video_size_mb = getattr(video_file, "_processed_size_mb", 0)
+            reel.save(update_fields=['video_duration', 'video_size_mb'])
+
+        return reel
+
+    
+    
+# -----------------------
+# Reel Update Serializer
+# -----------------------
 class ReelUpdateSerializer(serializers.ModelSerializer):
     tags = TagSerializer(many=True, read_only=True)  # for reading tags
     tag_ids = serializers.PrimaryKeyRelatedField(
@@ -257,6 +323,7 @@ class ReelReportSerializer(serializers.Serializer):
 # Audio Serializer
 # -----------------------     
 class AudioSerializer(serializers.ModelSerializer):
+    created_by = SimpleUserSerializer(read_only=True)
     reels_count = serializers.IntegerField(source="reels.count", read_only=True)
 
     class Meta:

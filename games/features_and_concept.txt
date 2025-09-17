@@ -1,0 +1,139 @@
+Creator-Set Rewards (Flexible MVP)
+
+Reward Details Input
+
+Title / Name of the reward
+
+Description / Text (can include conditions, like “1-month mobile recharge”)
+
+Image Upload for the reward (good quality, visually appealing)
+
+Optional external link (Amazon, e-commerce, or digital gift link)
+
+Reward Types
+
+Cash (via QR / UPI)
+
+Digital rewards (recharge, subscriptions, codes)
+
+Physical products (creator ships externally)
+
+Creator Responsibility
+
+Creator confirms responsibility before publishing the game
+
+App only facilitates display and messaging—does not guarantee delivery
+
+UI / Display
+
+Reward info displayed to users after the reel/game
+
+Makes the game more attractive and engaging
+
+MVP Benefits
+
+Creators can showcase their reward creatively
+
+Users get clear idea of what they can win
+
+Simple backend—store text, image, optional link
+
+
+
+
+
+
+
+
+Perfect! Here’s a **full MVP flow diagram** for your gaming feature in your app “Cientme,” with the **game appearing after reels**:
+
+---
+
+### **Cientme MVP Gaming Flow Diagram**
+
+**1. Reel Display**
+
+* User scrolls reels (TikTok-style feed).
+* Reel ends → triggers **game prompt** if the reel has a linked game.
+
+---
+
+**2. Game Creation (by Creator or Company)**
+
+* Creator selects:
+
+  * Number of winners (e.g., top 5)
+  * Reward type: **cash (QR/UPI), digital (recharge, subscription), or product**
+  * Uploads reward **image + description + optional link**
+* Creator confirms **responsibility for reward delivery**.
+* Company can also create games **visible to all users**.
+
+---
+
+**3. Game Play / Participation**
+
+* Users participate immediately after reel ends.
+* User guesses number(s) or completes game task.
+* System randomly selects winners based on participation.
+
+---
+
+**4. Winner Selection**
+
+* Winner(s) are **announced immediately** after game ends.
+* App displays:
+
+  * Reward info (image/text/link)
+  * Messaging button to contact creator
+
+---
+
+**5. Messaging & Reward Claim**
+
+* **One-to-One Messaging:**
+
+  * Only winners can message creator.
+  * Winner sends QR code (for cash/digital rewards) or claim info (for product).
+* Creator sends reward **externally**.
+* Optional proof screenshot can be submitted by winner (logs only).
+
+---
+
+**6. Complaint / Escalation (Optional MVP Step)**
+
+* If reward is not received, winner can **file complaint to company**.
+* Company reviews proof and logs dispute.
+* App does **not guarantee delivery** at this stage.
+
+---
+
+**7. Creator Accountability**
+
+* Repeated complaints → **temporary block from creating games**.
+* Clear app rules:
+
+  > “Creators are responsible for delivering rewards. App is not liable for failures.”
+
+---
+
+**8. Post-MVP / Future Upgrades (Optional)**
+
+* Escrow payments: creator → company → winner
+* Non-cash digital rewards fully verified
+* Ratings or trust scores for creators
+* Separate gaming feed for games independent of reels
+
+---
+
+✅ **MVP Highlights:**
+
+* Game **always appears after reel** → increases reel watch time and engagement.
+* Flexible rewards: cash, digital, or product.
+* Simple messaging system: winners contact creators.
+* App **doesn’t handle money** yet—keeps MVP safe and simple.
+
+---
+
+If you want, I can **draw this as a visual diagram with boxes and arrows**, so it’s easier to show your developers or design team.
+
+Do you want me to do that?

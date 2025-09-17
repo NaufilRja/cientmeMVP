@@ -17,7 +17,8 @@ PASSWORD_MIN_LENGTH = 8
 # Media-related
 # -------------------
 MAX_IMAGE_SIZE_MB = 5       # Maximum image upload size in MB
-MAX_VIDEO_SIZE_MB = 50      # Maximum video upload size in MB
+MAX_VIDEO_SIZE_MB = 100     # Maximum video upload size in MB
+MAX_DURATION_SEC = 15       # Maximum video length 15 in seocds 
 ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"]
 ALLOWED_VIDEO_EXTENSIONS = ["mp4", "mov", "avi", "mkv"]
 
@@ -57,3 +58,5 @@ VISIBILITY_CHOICES = [
 
 # Weights for engagement reach logic
 LIKE_WEIGHT, COMMENT_WEIGHT, REPLY_COMMENT_WEIGHT, SHARE_WEIGHT, SAVE_WEIGHT, VIEW_WEIGHT, WATCH_WEIGHT, = 1.5, 3, 4, 6, 5, 0.2, 2
+
+

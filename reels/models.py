@@ -3,7 +3,7 @@ from django.utils.text import slugify
 from django.conf import settings
 from core.models.base import BaseModel
 from core.utils.upload_paths import reel_upload_to, reel_thumbnail_upload_to
-from core.mixins.queryset_mixins import ActiveQuerySet, ManagerFromQuerySet
+
 from core.utils.validators import validate_image_file_size, validate_video_file_size
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import os
@@ -70,9 +70,12 @@ class Reel(BaseModel):
 
     video = models.FileField(
         upload_to=reel_upload_to,
-        validators=[validate_video_file_size],
+        validators=[],
         help_text="Video file up to 15 seconds and 20 MB"
     )
+    
+    video_size_mb = models.FloatField(default=0)   # size in MB
+    video_duration = models.FloatField(default=0)  
 
   
     thumbnail = models.ImageField(
@@ -184,16 +187,20 @@ class Reel(BaseModel):
         or updated. Skip during simple field updates (like shares, likes, etc.).
         """
         update_fields = kwargs.get("update_fields", None)
+        
+        is_new = self.pk is None
 
         super().save(*args, **kwargs)
 
-            # Run compression only if video was added/changed
-        if not self.pk or (update_fields and "video" in update_fields):
-            if self.video and hasattr(self.video, "path") and os.path.exists(self.video.path):
+        
+        # Run compression only if video was added/changed
+        if (is_new or (update_fields and "video" in update_fields)) and self.video:
+            if hasattr(self.video, "path") and os.path.exists(self.video.path):
                 self._compress_video()
-                # regenerate thumbnail if missing
-                if not self.thumbnail:
-                    self._generate_thumbnail()
+
+            # Regenerate thumbnail if missing or file doesn't exist
+            if not self.thumbnail or not os.path.exists(self.thumbnail.path):
+                self._generate_thumbnail()
                     
 
     def _compress_video(self):
@@ -222,6 +229,8 @@ class Reel(BaseModel):
         except Exception as e:
             # Don’t crash the app if ffmpeg fails
             print(f"Video compression failed: {e}")
+            
+            
 
     def _generate_thumbnail(self):
         """Generate thumbnail from first frame of video."""
@@ -229,12 +238,20 @@ class Reel(BaseModel):
         frame = clip.get_frame(0)
 
         im = Image.fromarray(np.uint8(frame))
-        thumbnail_path = self.video.path.replace(".mp4", ".jpg")
+
+        # Save thumbnail to a proper folder
+        thumbnail_dir = os.path.join(settings.MEDIA_ROOT, "thumbnails")
+        os.makedirs(thumbnail_dir, exist_ok=True)
+
+        base_name = os.path.basename(self.video.name).replace(".mp4", ".jpg")
+        thumbnail_path = os.path.join(thumbnail_dir, base_name)
+
         im.save(thumbnail_path)
 
+        # Assign to model field
         self.thumbnail.name = os.path.relpath(thumbnail_path, settings.MEDIA_ROOT)
-        self.save(update_fields=["thumbnail"])
-        
+        super(Reel, self).save(update_fields=["thumbnail"])  # avoid recursion
+
         
 # -----------------------
 # Comment Model

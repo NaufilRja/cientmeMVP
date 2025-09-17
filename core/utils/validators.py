@@ -7,13 +7,21 @@ from core.constants import MAX_IMAGE_SIZE_MB, MAX_VIDEO_SIZE_MB
 
 
 
+
+
+
 def validate_image_file_size(file):
     if file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024:
         raise ValidationError(f"File too large. Max {MAX_IMAGE_SIZE_MB} MB allowed.")
 
+# def validate_video_file_size(file):
+#     if file.size > MAX_VIDEO_SIZE_MB * 1024 * 1024:
+#         raise ValidationError(f"File too large. Max {MAX_VIDEO_SIZE_MB} MB allowed.")
+
+
 def validate_video_file_size(file):
-    if file.size > MAX_VIDEO_SIZE_MB * 1024 * 1024:
-        raise ValidationError(f"File too large. Max {MAX_VIDEO_SIZE_MB} MB allowed.")
+    # Intentionally left empty — validation is handled in serializer
+    pass
 
 
 def validate_allowed_extensions(filename: str, allowed: Iterable[str]) -> None:
@@ -44,7 +52,6 @@ _url_validator = URLValidator(schemes=["http", "https"]) # strict to web URLs on
 
 
 
-
 def validate_http_url(value: str) -> None:
     """Validate that a string is an HTTP/HTTPS URL."""
-    _url_validator(value)
+    _url_validator(value)  # Raises ValidationError if invalid

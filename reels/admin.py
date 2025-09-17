@@ -54,6 +54,7 @@ class ReelAdmin(admin.ModelAdmin):
     list_filter = ("is_banned", "created_at")
     search_fields = ("title", "user__username")
     inlines = [CommentInline, ShareInline]
+    readonly_fields = ("video_size_mb", "video_duration")
 
     def likes_count(self, obj):
         return obj.likes.count()

@@ -151,6 +151,7 @@ class ReelSerializer(serializers.ModelSerializer):
             "comments",
             "views",
             'reach',
+            'is_ad',
             "is_banned",
             "created_at",
         ]
@@ -260,16 +261,28 @@ class ReelSerializer(serializers.ModelSerializer):
     
     
     def create(self, validated_data):
+        request = self.context.get("request")
+        # Only staff/superuser can set is_ad
+        if not request.user.is_staff and not request.user.is_superuser:
+            validated_data.pop("is_ad", None)
+
         video_file = validated_data.get('video')
         reel = super().create(validated_data)
 
         if video_file:
-            # Update duration and size using the temporary attributes
-            reel.video_duration = getattr(video_file, "_processed_duration", 0)
+            reel.video_duration = getattr(video_file,   "_processed_duration", 0)
             reel.video_size_mb = getattr(video_file, "_processed_size_mb", 0)
             reel.save(update_fields=['video_duration', 'video_size_mb'])
 
         return reel
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        # Restrict is_ad for normal users
+        if not request.user.is_staff and not request.user.is_superuser:
+            validated_data.pop("is_ad", None)
+        return super().update(instance, validated_data)
+
 
     
     

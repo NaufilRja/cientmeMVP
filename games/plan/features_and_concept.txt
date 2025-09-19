@@ -137,3 +137,118 @@ Perfect! Here’s a **full MVP flow diagram** for your gaming feature in your ap
 If you want, I can **draw this as a visual diagram with boxes and arrows**, so it’s easier to show your developers or design team.
 
 Do you want me to do that?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Here’s a structured list of **features we’ve discussed or can still add** for your number-guessing game, based on all previous conversations:
+
+---
+
+### **Core Features (Already Implemented / Planned)**
+
+1. **Game Creation**
+
+   * Creator or company can create a game.
+   * Set **number of winners**, **guess range** (`guess_min`, `guess_max`), **reward type**, and **reel link**.
+   * **Duration** of the game can be set (e.g., 24 hours, 1 week, etc.).
+   * `end_time` is calculated automatically based on duration.
+
+2. **User Participation**
+
+   * Users can **submit only one guess per game**.
+   * Guess must be within the specified range.
+   * Game **cannot be updated or deleted after participation**.
+   * Submissions are timestamped to determine winners.
+
+3. **Winning Logic**
+
+   * Creator sets **number of winning numbers**, but cannot choose exact numbers (randomly generated for transparency).
+   * Winners are determined based on earliest correct submissions.
+   * Each winning number is claimed only once.
+   * Winning info stored in `WinningNumber` model.
+
+4. **Admin Management**
+
+   * Inline view of submissions in Game admin.
+   * GameSubmission, WinningNumber, and Game admin interfaces with read-only fields where needed.
+   * Auto-assign creator on creation.
+
+5. **Game History & Winner History**
+
+   * `GameHistory` stores immutable info of completed games.
+   * `WinnerHistory` stores immutable info of winners.
+   * Users can see their own winning history.
+   * Creator/company can see all winners for their games.
+   * History cannot be deleted or altered.
+
+---
+
+### **Additional Features We Can Add**
+
+1. **Timer & Remaining Time Display**
+
+   * Show **remaining time** for active games to all users.
+   * Read-only fields: `duration`, `end_time`, `remaining_time`.
+
+2. **Notifications / Alerts**
+
+   * Notify users when:
+
+     * Game starts.
+     * Game ends.
+     * They win or lose.
+
+3. **Leaderboard / Gamification**
+
+   * Track user stats: total wins, participation count.
+   * Creator/company stats: number of games created, number of winners, total rewards distributed.
+   * Points / rewards for sharing games (optional for MVP).
+
+4. **Reward Claiming**
+
+   * Users can **claim prizes** after game ends.
+   * Mark claimed prizes in `WinningNumber` and `WinnerHistory`.
+
+5. **Filtering & Sorting in API**
+
+   * Filter games by active status, creator, reward type.
+   * Sort by ending soonest, most popular, or recently created.
+
+6. **Transparency Features**
+
+   * Display number of submissions per game.
+   * Show total winners and their prizes once game ends.
+
+7. **Optional Enhancements**
+
+   * Game can be **featured** or pinned for more visibility.
+   * Analytics for creators: participation rate, guessed numbers distribution, etc.
+
+---
+
+✅ **Summary:**
+For MVP, we have the **core features fully implemented**: creation, submission, winner logic, history, admin interface.
+Next, we can add **timer display, notification, reward claiming, and gamification features** to make it more engaging.
+
+---
+
+If you want, I can **draft the next version of models, serializers, and views** including:
+
+* `duration`, `end_time`, `remaining_time`
+* Winner declaration after time ends
+* Read-only history
+* Reward claiming logic
+
+Do you want me to do that next?

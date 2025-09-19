@@ -23,6 +23,7 @@ urlpatterns = [
     path("api/users/", include("users.urls")),
     path("api/core/", include("core.urls")),
     path("api/reels/", include("reels.urls")),
+    path("api/games/", include("games.urls")),
     
     # JWT login endpoint (get access & refresh tokens)
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

@@ -1,0 +1,121 @@
+Perfect! We have a **clear MVP blueprint**, so we can start implementing it step by step. Here’s how I suggest we structure the development for your **Cientme gaming feature**:
+
+---
+
+### **1. Models**
+
+**a) Game Model**
+
+* Creator (ForeignKey → User)
+* Title / Description / Image / Optional Link
+* Reward Type (cash, digital, product)
+* Number of Winners
+* Reel (ForeignKey → Reel) if linked to a reel
+* Status (Active / Completed)
+* Created timestamp
+
+**b) GameParticipant Model**
+
+* User (ForeignKey → User)
+* Game (ForeignKey → Game)
+* Guess / Participation details
+* Is\_winner (Boolean)
+
+**c) RewardClaim Model**
+
+* Game (ForeignKey → Game)
+* Winner (ForeignKey → User)
+* QR Code / Claim Info / Proof Image
+* Status (Pending / Completed / Disputed)
+* Created timestamp
+
+**d) Optional Complaint Model**
+
+* Game (ForeignKey → Game)
+* Winner (ForeignKey → User)
+* Message / Details
+* Status (Pending / Reviewed / Resolved)
+
+---
+
+### **2. Views / APIs**
+
+* **Game Creation** (creator/company)
+* **List Active Games** (after reel ends)
+* **Participate / Submit Guess**
+* **Select Winners** (randomized)
+* **Claim Reward** (send QR or info to creator)
+* **Messaging** (winner → creator, one-to-one)
+* **Complaint Submission**
+
+---
+
+### **3. Logic Flow**
+
+1. Reel ends → check if reel has a linked game → show game UI.
+2. User participates → system records participation.
+3. Game ends → select winners randomly → show winners & reward info.
+4. Winner messages creator → sends QR / claim info.
+5. Optional proof → store in RewardClaim.
+6. Complaint flow if reward not received → logged for admin review.
+7. Creator accountability → temporary block if repeated failures.
+
+---
+
+### **4. Frontend Notes**
+
+* Game should **pop up immediately after reel ends**.
+* Reward info **display image, text, optional link** clearly.
+* Messaging button visible **only for winners**.
+* Complaint form accessible **after reward claim window**.
+
+---
+
+We can start coding **step 1: Models** first. I can write **the Django models for Game, GameParticipant, RewardClaim, and Complaint** following our MVP plan.
+
+Do you want me to do that now?
+
+
+
+
+
+
+===================Topics of game==========================
+###############Topics we already covered###################
+
+Game model basics – fields like title, reward_type, number_of_winners, guess_min, guess_max, etc.
+
+Fairness system – salt, hash_value, and winning_numbers_encrypted with Fernet.
+
+Admin setup – Game, GameSubmission, WinningNumber, GameHistory, WinnerHistory.
+
+Serializer setup – exposing the right fields, read-only for fairness values.
+
+.env + FERNET_SECRET_KEY – secure storage, removed auto key generation.
+
+Soft delete idea – is_active=False instead of permanent delete.
+
+
+
+
+######################⏳ Topics still left#########################
+
+Game Join/Participation – API for users to submit guesses.
+
+Auto Close Game – mark game inactive after duration/end_time.
+
+Winner Selection Logic – decrypt numbers, assign winners, store in WinningNumber + WinnerHistory.
+
+Reward Claim Flow – winners claim their prize.
+
+Game History Auto-Save – completed games go to history.
+
+Public Verification Endpoint – users can verify salt + hash + decrypted numbers.
+
+Leaderboard / Stats – player ranking.
+
+Notifications System – when game ends or user wins.
+
+Reward Types Logic – coins, vouchers, etc.
+
+Fraud Prevention – prevent duplicate guesses, enforce min/max.

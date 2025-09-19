@@ -10,7 +10,12 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
+from dotenv import load_dotenv  # make sure python-dotenv is installed
+
+
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -156,8 +161,9 @@ REST_FRAMEWORK = {
 }
 
 
-
 from datetime import timedelta
+
+
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),   # short time session
@@ -192,3 +198,17 @@ BADGE_TIERS = {
 
 
 BASE_URL = "http://127.0.0.1:8000"
+
+
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env
+load_dotenv(BASE_DIR / ".env")
+
+# Load Fernet key
+FERNET_SECRET_KEY = os.getenv("FERNET_SECRET_KEY")
+if not FERNET_SECRET_KEY:
+    raise ValueError("FERNET_SECRET_KEY is missing in environment variables")
+FERNET_SECRET_KEY = FERNET_SECRET_KEY.encode()  # convert to bytes

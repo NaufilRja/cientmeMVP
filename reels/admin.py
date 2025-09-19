@@ -44,6 +44,7 @@ class ReelAdmin(admin.ModelAdmin):
         "id",
         "title",
         "user",
+        "is_ad",
         "views",
         "likes_count",
         "saves_count",
@@ -51,7 +52,7 @@ class ReelAdmin(admin.ModelAdmin):
         "reach",
         "created_at",
     )
-    list_filter = ("is_banned", "created_at")
+    list_filter = ("is_ad", "is_banned", "created_at")
     search_fields = ("title", "user__username")
     inlines = [CommentInline, ShareInline]
     readonly_fields = ("video_size_mb", "video_duration")

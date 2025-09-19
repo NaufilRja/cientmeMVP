@@ -1,12 +1,19 @@
- UW PICO 5.09                                                              File: .gitignore                                                                 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
+# Virtual environment
+venv/
+env/
 
+# Django
+*.sqlite3
+*.log
+staticfiles/
+media/
 
-
-
-
-
-
-
-^G Get Help               ^O WriteOut               ^R Read File              ^Y Prev Pg                ^K Cut Text               ^C Cur Pos                
-^X Exit                   ^J Justify                ^W Where is               ^V Next Pg                ^U UnCut Text             ^T To Spell               
+# IDEs
+.vscode/
+.idea/

@@ -154,6 +154,11 @@ class Reel(BaseModel):
         null=True,
         help_text="Stores the last reported reason"
     )
+    
+    is_ad = models.BooleanField(
+        default=False,
+        help_text="Marks this reel as an advertisement (only staff/company can set this)."
+    )
 
     is_banned = models.BooleanField(
         default=False,

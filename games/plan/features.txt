@@ -119,3 +119,38 @@ Notifications System – when game ends or user wins.
 Reward Types Logic – coins, vouchers, etc.
 
 Fraud Prevention – prevent duplicate guesses, enforce min/max.
+
+
+
+
+
+
+
+*************************************************************
+⏳ Topics still left (not fully implemented yet)
+
+Game Join/Participation – API exists partially via GameSubmissionSerializer, but we need:
+
+Auto-check if the game is still active.
+
+Prevent submissions after end_time.
+
+Possibly return a meaningful response like “Game closed” if duration ended.
+
+Auto Close Game – automatically mark game inactive after duration/end_time. (Currently, end_time is set, but no automated job to close.)
+
+Winner Selection Logic – currently, we check only guessed numbers against unclaimed WinningNumbers.
+
+We need a full automatic winner selection after game closes, decrypting numbers, assigning winners, and updating WinningNumber + WinnerHistory.
+
+Reward Claim Flow – winners can claim prize. (Not implemented yet.)
+
+Game History Auto-Save – completed games moving to GameHistory. (Currently, GameHistory exists but auto-save is not implemented.)
+
+Public Verification Endpoint – verify salt + hash + decrypted numbers. (Not done yet.)
+
+Leaderboard / Stats – player ranking. (Not done.)
+
+Notifications System – notify users when game ends or they win. (Not done.)
+
+Reward Types Logic – coins, vouchers, physical products. (Partially defined via reward_type, but logic to assign/apply rewards is pending.)

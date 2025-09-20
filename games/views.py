@@ -1,38 +1,34 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, serializers
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
-from rest_framework import serializers
 from django.utils import timezone
 from django.conf import settings
+
 from .services.game_fairness import GameFairness
 from .services.game_logic import generate_winning_numbers
 
-
 from .models import (
-    Game, 
-    GameSubmission,
-    WinningNumber,
-    GameHistory,
-    WinnerHistory
+    Game, GameSubmission, WinningNumber,
+    GameHistory, WinnerHistory, RewardMessage
 )
 
 from .serializers import (
-    GameSerializer, 
-    GameSubmissionSerializer,
-    WinningNumberSerializer,
-    GameHistorySerializer,
-    WinnerHistorySerializer
+    GameSerializer, GameSubmissionSerializer,
+    WinningNumberSerializer, GameHistorySerializer,
+    WinnerHistorySerializer, RewardMessageSerializer
 )
 
 
-
-
+# -----------------------
+# Game ViewSet
+# -----------------------
 class GameViewSet(viewsets.ModelViewSet):
     serializer_class = GameSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
+        """Return active games, optionally filtered by reel_id"""
         queryset = Game.objects.filter(is_active=True).order_by('-created_at')
         reel_id = self.request.query_params.get('reel_id')
         if reel_id:
@@ -40,6 +36,7 @@ class GameViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
+        """Assign creator, set end_time, generate winning numbers with provably fair encryption"""
         user = self.request.user
         game_instance = serializer.save(creator=user)
 
@@ -56,7 +53,7 @@ class GameViewSet(viewsets.ModelViewSet):
             raise serializers.ValidationError(str(e))
 
         encrypted_numbers = GameFairness.encrypt_numbers(
-            "-".join(map(str, winning_numbers)),
+            ",".join(map(str, winning_numbers)),
             settings.FERNET_SECRET_KEY
         )
 
@@ -66,24 +63,33 @@ class GameViewSet(viewsets.ModelViewSet):
         game_instance.save(update_fields=['end_time', 'salt', 'hash_value', 'winning_numbers_encrypted'])
 
     def perform_update(self, serializer):
-        user = self.request.user
+        """Restrict updates if participants exist and only allow creator/staff"""
         instance = serializer.instance
+        user = self.request.user
 
         if not (user.is_staff or user == instance.creator):
             raise PermissionDenied("You cannot update this game.")
 
         if instance.submissions.exists():
-            restricted_fields = ['title', 'description', 'image', 'reward_type', 'link',
-                                 'guess_min', 'guess_max', 'number_of_winners']
+            restricted_fields = [
+                'title', 'description', 'image', 'reward_type', 'link',
+                'guess_min', 'guess_max', 'number_of_winners',
+                'auto_close', 'auto_select_winner',
+            ]
             for field in restricted_fields:
                 if field in serializer.validated_data:
                     raise serializers.ValidationError(
                         f"Cannot update '{field}' because participants have already submitted guesses."
                     )
+            if 'winners_selected' in serializer.validated_data:
+                raise serializers.ValidationError(
+                    "You cannot manually change 'winners_selected'. It is set automatically."
+                )
 
         serializer.save()
 
     def perform_destroy(self, instance):
+        """Soft-delete game; prevent deletion if submissions exist"""
         user = self.request.user
 
         if not (user.is_staff or user == instance.creator):
@@ -97,8 +103,10 @@ class GameViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=['is_active'])
 
-        
-        
+
+# -----------------------
+# Game Submission ViewSet
+# -----------------------
 class GameSubmissionViewSet(viewsets.ModelViewSet):
     serializer_class = GameSubmissionSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -110,68 +118,79 @@ class GameSubmissionViewSet(viewsets.ModelViewSet):
         return GameSubmission.objects.filter(user=user).order_by('submitted_at')
 
     def perform_create(self, serializer):
+        """Assign current user and validate game status"""
+        game = serializer.validated_data.get('game')
+
+        # --------- ADD THESE LINES AT THE START ----------
+        if not game.is_active:
+            raise serializers.ValidationError("This game is closed. You cannot submit guesses.")
+
+        if timezone.now() > game.end_time:
+            game.is_active = False  # memory update: mark game closed
+            game.save(update_fields=['is_active'])
+            raise serializers.ValidationError("This game has ended.")
+
+        # Optional: prevent duplicate submissions
+        if GameSubmission.objects.filter(game=game, user=self.request.user).exists():
+            raise serializers.ValidationError("You have already submitted.")
+        # --------------------------------------------------
+
+        # Original code continues
         serializer.save(user=self.request.user, submitted_at=timezone.now())
+
+        guessed_number = serializer.validated_data.get('guessed_number')
+        winning_number_obj = game.winning_numbers.filter(number=guessed_number, is_claimed=False).first()
+        if winning_number_obj:
+            submission = serializer.instance
+            submission.mark_winner(position=winning_number_obj.prize_position)
+
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
     def mark_winners(self, request, pk=None):
-        """
-        Admin/staff can mark winners manually.
-        """
+        """Allow admin to mark winners manually"""
         submission = self.get_object()
         game = submission.game
-
         submissions = game.submissions.order_by('submitted_at')
         winners_count = game.number_of_winners
 
         position = 1
-        for submission in submissions:
+        for sub in submissions:
             if position > winners_count:
                 break
-            submission.mark_winner(position)
+            sub.mark_winner(position=position)
             position += 1
 
         return Response({'status': f'{winners_count} winners marked.'})
 
-
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def my_submissions(self, request):
+        """Return only current user submissions"""
+        submissions = GameSubmission.objects.filter(user=request.user).order_by('-submitted_at')
+        serializer = self.get_serializer(submissions, many=True)
+        return Response(serializer.data)
 
 
 # -----------------------
-# Game Number ViewSet
+# Winning Number ViewSet
 # -----------------------
 class WinningNumberViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Read-only API for winning numbers.
-    - Users can see all winning numbers for a game
-    - Shows reward info and winner if claimed
-    """
-    queryset = WinningNumber.objects.all().order_by('prize_position')
     serializer_class = WinningNumberSerializer
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-        """
-        Optionally filter by `game_id` query param
-        """
-        queryset = super().get_queryset()
+        queryset = WinningNumber.objects.all().order_by('prize_position')
         game_id = self.request.query_params.get('game_id')
         if game_id:
             queryset = queryset.filter(game_id=game_id)
         return queryset
 
 
-
-
 # -----------------------
 # Game History ViewSet
 # -----------------------
 class GameHistoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Read-only viewset for completed games history.
-    - Users can see past games created by any creator.
-    - Immutable: no creation, update, or deletion allowed.
-    """
-    queryset = GameHistory.objects.all().order_by('-completed_at')
     serializer_class = GameHistorySerializer
+    queryset = GameHistory.objects.all().order_by('-completed_at')
     permission_classes = [permissions.AllowAny]
 
 
@@ -179,11 +198,33 @@ class GameHistoryViewSet(viewsets.ReadOnlyModelViewSet):
 # Winner History ViewSet
 # -----------------------
 class WinnerHistoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    Read-only viewset for winners of games.
-    - Users can see who won and prize details.
-    - Immutable: no creation, update, or deletion allowed.
-    """
-    queryset = WinnerHistory.objects.all().order_by('-claimed_at')
     serializer_class = WinnerHistorySerializer
+    queryset = WinnerHistory.objects.all().order_by('-claimed_at')
     permission_classes = [permissions.AllowAny]
+
+
+# -----------------------
+# RewardMessage ViewSet
+# -----------------------
+class RewardMessageViewSet(viewsets.ModelViewSet):
+    serializer_class = RewardMessageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """Return messages only for sender or winner/creator"""
+        user = self.request.user
+        return RewardMessage.objects.filter(
+            winner_history__user=user
+        ) | RewardMessage.objects.filter(
+            winner_history__game_history__creator=user
+        )
+
+    def perform_create(self, serializer):
+        """Validate permission and assign sender"""
+        wh = serializer.validated_data.get("winner_history")
+        user = self.request.user
+
+        if user != wh.user and user != wh.game_history.creator:
+            raise PermissionDenied("You are not allowed to send messages for this reward.")
+
+        serializer.save(sender=user)

@@ -1,0 +1,57 @@
+[User Creates Game]
+        |
+        v
+[GameSerializer.validate() & GameViewSet.perform_create()]
+        |
+        |-- Validate: description/image/link, guess_min/max, number_of_winners
+        |-- Assign creator, set end_time
+        |
+        v
+[Generate Winning Numbers]
+        |
+        |-- generate_winning_numbers(guess_min, guess_max, number_of_winners)
+        |-- Returns: winning_numbers, salt, hash_value
+        |
+        v
+[Encrypt Winning Numbers]
+        |
+        |-- GameFairness.encrypt_numbers(winning_numbers, FERNET_SECRET_KEY)
+        |-- Store: winning_numbers_encrypted, salt, hash_value
+        |
+        v
+[Game is Active → Users Submit Guesses]
+        |
+        v
+[GameSubmissionViewSet.perform_create()]
+        |
+        |-- Validate: game is active, number in guess_min..guess_max
+        |-- Save submission (user, guessed_number, submitted_at)
+        |
+        |-- Check if guessed_number matches any encrypted winning number
+        |     |
+        |     v
+        |  Mark winner using submission.mark_winner()
+        |
+        v
+[Game Ends Automatically or via Auto-Select Winner]
+        |
+        |-- GameSerializer.get_winning_numbers() / WinningNumberViewSet
+        |-- Decrypt encrypted winning numbers using
+        |     GameFairness.decrypt_numbers(winning_numbers_encrypted)
+        |-- Determine winners & prize positions
+        |
+        v
+[WinnerHistory & RewardMessage Management]
+        |
+        |-- Winners can claim rewards
+        |-- Messages can be sent to winners via RewardMessage
+
+
+
+
+
+**************************************************************
+
+If you want, I can also make a compact “step-by-step numbered flow” version showing exact function calls in order — it’s super useful for debugging or documentation.
+
+Do you want me to do

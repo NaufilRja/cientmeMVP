@@ -212,3 +212,17 @@ FERNET_SECRET_KEY = os.getenv("FERNET_SECRET_KEY")
 if not FERNET_SECRET_KEY:
     raise ValueError("FERNET_SECRET_KEY is missing in environment variables")
 FERNET_SECRET_KEY = FERNET_SECRET_KEY.encode()  # convert to bytes
+
+
+
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+
+
+# EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# EMAIL_HOST = 'smtp.yourprovider.com'
+# EMAIL_PORT = 587
+# EMAIL_USE_TLS = True
+# EMAIL_HOST_USER = 'your-email@cientme.com'
+# EMAIL_HOST_PASSWORD = 'your-email-password'
+# DEFAULT_FROM_EMAIL = 'Cientme <no-reply@cientme.com>'

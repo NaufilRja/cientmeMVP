@@ -108,6 +108,9 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_active', 'is_staff', 'date_joined', 'profile']
 
 
+# -----------------------
+# Simple User Serializer
+# -----------------------
 class SimpleUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -116,6 +119,24 @@ class SimpleUserSerializer(serializers.ModelSerializer):
             "username",
             "avatar",
         ]
+
+
+# -----------------------
+# User Adin Serializer
+# -----------------------
+class UserAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "is_banned",
+            "strike_count",
+            "temp_block_until",
+        ]
+        read_only_fields = ["id", "strike_count", "temp_block_until"]  # optional
+
 
 
 # -----------------------

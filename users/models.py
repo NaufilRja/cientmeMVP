@@ -11,6 +11,7 @@ from django.contrib.auth.models import (
     AbstractBaseUser, BaseUserManager, PermissionsMixin
 )
 from django.utils import timezone
+from datetime import timedelta
 
 
 
@@ -106,18 +107,69 @@ class User(AbstractBaseUser, PermissionsMixin):
     updated_at = models.DateTimeField(auto_now=True, )
     
     is_banned = models.BooleanField(default=False, help_text="Ban this user from using the app")
+    
+    strike_count = models.PositiveIntegerField(default=0, help_text="How many strikes this user has received.")
+    temp_block_until = models.DateTimeField(null=True, blank=True, help_text="User is temporarily blocked until this datetime.")
+
 
     def ban(self):
-        """Ban user and deactivate account."""
+        """Permanently ban user and deactivate account."""
         self.is_banned = True
-        self.is_active = False  # built-in field (prevents login)
-        self.save()
+        self.is_active = False  # prevents login
+        self.temp_block_until = None  # remove any temporary block
+        self.save(update_fields=['is_banned', 'is_active', 'temp_block_until'])
 
     def unban(self):
         """Unban user and reactivate account."""
         self.is_banned = False
         self.is_active = True
-        self.save()
+        self.temp_block_until = None  # remove temporary block if any
+        self.save(update_fields=['is_banned', 'is_active', 'temp_block_until'])
+
+    def add_strike(self, days_block=7):
+        """
+        Add a strike to the user.
+        - 3 strikes or more → permanent ban
+        - Otherwise → temporary block for `days_block` days
+        """
+        self.strike_count += 1
+
+        if self.strike_count >= 3:
+            self.ban()
+        else:
+            self.temp_block_until = timezone.now() + timedelta(days=days_block)
+            self.is_active = False
+            self.save(update_fields=['strike_count', 'temp_block_until', 'is_active'])
+
+    def lift_block(self):
+        """Automatically lift temporary block if block period has expired."""
+        if self.temp_block_until and timezone.now() > self.temp_block_until:
+            self.temp_block_until = None
+            self.is_active = True
+            self.save(update_fields=['temp_block_until', 'is_active'])
+
+
+    def is_blocked(self):
+        """
+        Returns True if the user is permanently banned or temporarily blocked.
+        This unifies all checks for easy use across APIs.
+        """
+        # Permanent ban check
+        if self.is_banned:
+            return True
+
+        # Temporary block check
+        if self.temp_block_until and timezone.now() < self.temp_block_until:
+            return True
+
+        # Optional: auto-lift block if time expired
+        if self.temp_block_until and timezone.now() >= self.temp_block_until:
+            self.lift_block()  # reset temp block
+            return False
+
+        return False
+
+        
 
     # Attach custom manager
     objects = UserManager()

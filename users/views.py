@@ -14,7 +14,8 @@ from django.conf import settings
 
 
 from users.models import Profile
-from .serializers import(SignupSerializer, LoginSerializer, UserSerializer, ForgotPasswordSerializer, ResetPasswordSerializer, ProfileSerializer, ChangePasswordSerializer
+from .serializers import(SignupSerializer, LoginSerializer, UserSerializer, ForgotPasswordSerializer, ResetPasswordSerializer, ProfileSerializer, ChangePasswordSerializer, UserAdminSerializer
+
 )
 
 from core.mixins.action_mixins import OwnerActionsMixin
@@ -322,3 +323,20 @@ class ChangePasswordView(generics.UpdateAPIView):
     
     
  
+
+# -----------------------
+# User Admin List View
+# ----------------------- 
+class UserAdminListView(generics.ListAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserAdminSerializer
+    permission_classes = [permissions.IsAdminUser]  # only staff can access
+
+
+# -----------------------
+# User Admin Delete View
+# -----------------------
+class UserAdminDetailView(generics.RetrieveUpdateAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserAdminSerializer
+    permission_classes = [permissions.IsAdminUser]

@@ -7,12 +7,12 @@ from .models import User, Profile
 # -----------------
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ('id', 'email', 'is_active', 'is_staff')
+    list_display = ('id', 'email', 'is_active', 'is_staff',  "is_banned", "strike_count", "temp_block_until")
     list_display_links = ('id', 'email')
     search_fields = ('email', 'bio')
-    list_filter = ('is_active', 'is_staff')
+    list_filter = ('is_active', 'is_staff',  "is_banned")
     fields = ('email', 'bio', 'is_active', 'is_staff', 'password')
-
+    readonly_fields = ("strike_count",)
 
 # -----------------
 #   Profile Admin

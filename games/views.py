@@ -10,13 +10,13 @@ from .services.game_logic import generate_winning_numbers
 
 from .models import (
     Game, GameSubmission, WinningNumber,
-    GameHistory, WinnerHistory, RewardMessage
+    GameHistory, WinnerHistory, RewardMessage, GameComplaint
 )
 
 from .serializers import (
     GameSerializer, GameSubmissionSerializer,
     WinningNumberSerializer, GameHistorySerializer,
-    WinnerHistorySerializer, RewardMessageSerializer
+    WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer
 )
 
 
@@ -228,3 +228,46 @@ class RewardMessageViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You are not allowed to send messages for this reward.")
 
         serializer.save(sender=user)
+
+
+
+
+# -----------------------
+# Winner History ViewSet
+# -----------------------
+class GameComplaintViewSet(viewsets.ModelViewSet):
+    """
+    Handles complaints in a single class.
+
+    - Winners: can only create complaints for their own rewards.
+    - Admins/Staff: can view, update, and resolve any complaint.
+    """
+
+    serializer_class = GameComplaintSerializer
+    queryset = GameComplaint.objects.all()
+
+    def get_permissions(self):
+        """
+        Winners: only 'create' allowed.
+        Admins: full access.
+        """
+        if self.action in ["create"]:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAdminUser()]
+
+    def perform_create(self, serializer):
+        """
+        Attach user automatically & enforce winner-only rule.
+        """
+        user = self.request.user
+        winner_history = serializer.validated_data.get("winner_history")
+
+        # Rule 1: Only the actual winner can file a complaint
+        if user != winner_history.user:
+            raise PermissionDenied("Only the winner can submit a complaint for this reward.")
+
+        # Rule 2: Winner must still be a follower of the creator
+        if user not in winner_history.game.creator.profile.followers.all():
+            raise PermissionDenied("You must be following the creator to submit a complaint.")
+
+        serializer.save(user=user)

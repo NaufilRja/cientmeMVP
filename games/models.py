@@ -136,9 +136,13 @@ class Game(BaseModel):
         for number in decrypted_numbers:
             if position > self.number_of_winners:
                 break
-            winner_submission = submissions.filter(guessed_number=number).first()
-            if not winner_submission:
-                continue
+            
+            matched_submissions = submissions.filter(guessed_number=number)
+            if  not matched_submissions.exists():
+                continue  # no winner for this number
+
+            #  FIRST submission wins
+            winner_submission = matched_submissions.first()
 
             wn, _ = WinningNumber.objects.get_or_create(
                 game=self,
@@ -201,6 +205,7 @@ class Game(BaseModel):
                 print(f"Failed to send winner email: {e}")
 
             position += 1
+            
 
         # Notify creator
         try:
@@ -225,6 +230,7 @@ class Game(BaseModel):
 
         self.winners_selected = True
         self.save(update_fields=['winners_selected'])
+        
 
     @classmethod
     def auto_close_expired_games(cls):
@@ -245,7 +251,7 @@ class Game(BaseModel):
 
 
 # -----------------------
-# WinningNumber Model
+# Winning Number Model
 # -----------------------
 class WinningNumber(BaseModel):
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="winning_numbers")
@@ -268,7 +274,7 @@ class WinningNumber(BaseModel):
 
 
 # -----------------------
-# GameSubmission Model
+# Game Submission Model
 # -----------------------
 class GameSubmission(BaseModel):
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name='submissions')
@@ -282,9 +288,17 @@ class GameSubmission(BaseModel):
         unique_together = ('game', 'user')
 
     def save(self, *args, **kwargs):
+        # 1️ Check guessed number is within range
         if self.guessed_number < self.game.guess_min or self.guessed_number > self.game.guess_max:
             raise ValueError(f"Guessed number must be between {self.game.guess_min} and {self.game.guess_max}")
+
+        # 2️ Followers-only participation check
+        if self.user not in self.game.creator.profile.followers.all():
+            raise ValueError("You must follow the creator to participate in this game.")
+
+        # 3️ Save submission
         super().save(*args, **kwargs)
+
 
     def mark_winner(self, position: int = None):
         self.is_winner = True
@@ -294,7 +308,7 @@ class GameSubmission(BaseModel):
 
 
 # -----------------------
-# GameHistory Model
+# Game History Model
 # -----------------------
 class GameHistory(BaseModel):
     game = models.OneToOneField(Game, on_delete=models.CASCADE, related_name="history")
@@ -319,7 +333,7 @@ class GameHistory(BaseModel):
 
 
 # -----------------------
-# WinnerHistory Model
+# Winner History Model
 # -----------------------
 class WinnerHistory(models.Model):
     game_history = models.ForeignKey("GameHistory", on_delete=models.CASCADE, related_name="winners")
@@ -336,6 +350,8 @@ class WinnerHistory(models.Model):
     claim_deadline = models.DateTimeField(blank=True, null=True)
     reward_delivery_deadline = models.DateTimeField(blank=True, null=True)
     reward_delivered = models.BooleanField(default=False)
+    forfeited = models.BooleanField(default=False, help_text="Marks if the reward was not claimed in time.")
+
 
     class Meta:
         verbose_name = "Winner History"
@@ -348,19 +364,46 @@ class WinnerHistory(models.Model):
     def __str__(self):
         return f"Winner {self.user.username if self.user else 'Unknown'} (GameHistory {self.game_history.id})"
 
+    @property
+    def can_message(self):
+        now = timezone.now()
+        if self.reward_delivered:
+            return False
+        if self.claim_deadline and not self.is_claimed and now > self.claim_deadline:
+            return False
+        return True
+
     # Claim reward method
     def claim_reward(self):
         if self.is_claimed:
             raise ValueError("Reward already claimed.")
-        if self.claim_deadline and timezone.now() > self.claim_deadline:
-            raise ValueError("Claim period has expired.")
 
+        now = timezone.now()
+
+        # 1️ Followers-only claim check
+        if self.user not in self.game.creator.profile.followers.all():
+            # Notify in-app
+            RewardMessage.objects.create(
+                winner_history=self,
+                sender=self.game.creator,
+                message="⚠️ You cannot claim this reward because you are not a follower. Reward forfeited.",
+                image=None
+            )
+            raise ValueError("You must be following the creator to claim the reward. Reward forfeited.")
+
+        # 2️ Check if claim deadline has passed
+        if self.claim_deadline and now > self.claim_deadline:
+            self.forfeited = True
+            self.save(update_fields=['forfeited'])
+            raise ValueError("Claim period has expired. Reward forfeited.")
+
+        # 3️ Proceed with claim
         self.is_claimed = True
-        self.claimed_at = timezone.now()
+        self.claimed_at = now
         self.reward_delivery_deadline = self.claimed_at + timedelta(days=7)
         self.save(update_fields=['is_claimed', 'claimed_at', 'reward_delivery_deadline'])
 
-        # Notify creator
+        # 4️ Notify creator via email
         try:
             send_mail(
                 subject=f"Reward claimed by {self.user.username}",
@@ -370,14 +413,16 @@ class WinnerHistory(models.Model):
                 fail_silently=True,
             )
         except Exception as e:
-            print(f"❌ Failed to notify creator: {e}")
+            print(f" Failed to notify creator: {e}")
 
+        # 5️ Create in-app reward message confirming claim
         RewardMessage.objects.create(
             winner_history=self,
             sender=self.user,
-            message="✅ I have claimed my reward.",
+            message=" I have claimed my reward.",
             image=None
         )
+
 
     def mark_delivered(self):
         if not self.is_claimed:
@@ -410,7 +455,7 @@ class WinnerHistory(models.Model):
 
 
 # -----------------------
-# RewardMessage Model
+# Reward Message Model
 # -----------------------
 class RewardMessage(models.Model):
     winner_history = models.ForeignKey(WinnerHistory, on_delete=models.CASCADE, related_name="messages")
@@ -425,9 +470,126 @@ class RewardMessage(models.Model):
 
         now = timezone.now()
         wh = self.winner_history
-        allowed_until = wh.reward_delivery_deadline or wh.claim_deadline or now
 
-        if now > allowed_until:
-            raise ValueError("Messaging period has expired.")
+        # Determine if messaging is allowed
+        messaging_allowed = True
+
+        if wh.reward_delivered:
+            messaging_allowed = False
+        elif wh.claim_deadline and not wh.is_claimed and now > wh.claim_deadline:
+            messaging_allowed = False
+
+        if not messaging_allowed:
+            raise ValueError("Messaging is no longer allowed for this winner.")
 
         super().save(*args, **kwargs)
+
+
+
+
+
+
+# -----------------------
+# Game Complaint Model
+# -----------------------
+class GameComplaint(models.Model):
+    """
+    Represents a complaint submitted by a winner regarding issues with claiming 
+    or receiving a reward in a game. 
+    
+    Rules enforced:
+    1. Only winners can submit a complaint.
+    2. Optionally, the winner must still follow the game creator.
+    3. Tracks complaint status: pending, resolved, or rejected.
+    """
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("resolved", "Resolved"),
+        ("rejected", "Rejected"),
+    ]
+
+    # The WinnerHistory object that this complaint is associated with
+    winner_history = models.ForeignKey(
+        "WinnerHistory",
+        on_delete=models.CASCADE,
+        related_name="complaints",
+        help_text="The winner who is filing the complaint."
+    )
+
+    # The user submitting the complaint (must be the winner)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="game_complaints",
+        help_text="The user submitting the complaint (must be the winner)."
+    )
+
+    # Detailed message of the complaint
+    message = models.TextField(help_text="Details of the complaint.")
+
+    # Timestamps and status
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="pending",
+        help_text="Current status of the complaint."
+    )
+    resolved_at = models.DateTimeField(
+        blank=True, 
+        null=True,
+        help_text="Timestamp when the complaint was resolved or rejected."
+    )
+
+    # Optional response from the creator or admin
+    response = models.TextField(
+        blank=True, 
+        null=True,
+        help_text="Response from the creator or admin regarding this complaint."
+    )
+
+    class Meta:
+        verbose_name = "Game Complaint"
+        verbose_name_plural = "Game Complaints"
+
+    def save(self, *args, **kwargs):
+        """
+        Overrides save() to enforce rules:
+        1. Only the winner can submit the complaint.
+        2. Optionally, the winner must still follow the creator.
+        """
+        # Ensure only the winner can submit
+        if self.user != self.winner_history.user:
+            raise ValueError("Only the winner can submit a complaint for this reward.")
+
+        # Optional Ensure winner is still a follower
+        if self.user not in self.winner_history.game.creator.profile.followers.all():
+            raise ValueError("You must be following the creator to submit a complaint.")
+
+        # Proceed with saving the complaint
+        super().save(*args, **kwargs)
+
+    def mark_resolved(self, response_message: str = ""):
+        """
+        Marks the complaint as resolved and optionally adds a response message.
+        """
+        self.status = "resolved"
+        self.resolved_at = timezone.now()
+        self.response = response_message
+        self.save(update_fields=["status", "resolved_at", "response"])
+
+    def mark_rejected(self, response_message: str = ""):
+        """
+        Marks the complaint as rejected and optionally adds a response message.
+        """
+        self.status = "rejected"
+        self.resolved_at = timezone.now()
+        self.response = response_message
+        self.save(update_fields=["status", "resolved_at", "response"])
+
+    def __str__(self):
+        """
+        String representation for admin or debugging purposes.
+        """
+        return f"Complaint by {self.user.username} for game '{self.winner_history.game_history.title}' (Status: {self.status})"

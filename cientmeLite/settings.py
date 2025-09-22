@@ -13,12 +13,33 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 from dotenv import load_dotenv  # make sure python-dotenv is installed
+from celery.schedules import crontab
 
 
 
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+# -----------------
+# Base directory
+# -----------------
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# -----------------
+# Load environment variables
+# -----------------
+load_dotenv(BASE_DIR / '.env')
+
+
+
+
+
+FERNET_SECRET_KEY = os.getenv("FERNET_SECRET_KEY")
+if not FERNET_SECRET_KEY:
+    raise ValueError("FERNET_SECRET_KEY is missing in environment variables")
+
+
+FERNET_SECRET_KEY = FERNET_SECRET_KEY.encode()
+
+
+
 
 
 # Quick-start development settings - unsuitable for production
@@ -200,21 +221,6 @@ BADGE_TIERS = {
 BASE_URL = "http://127.0.0.1:8000"
 
 
-
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Load environment variables from .env
-load_dotenv(BASE_DIR / ".env")
-
-# Load Fernet key
-FERNET_SECRET_KEY = os.getenv("FERNET_SECRET_KEY")
-if not FERNET_SECRET_KEY:
-    raise ValueError("FERNET_SECRET_KEY is missing in environment variables")
-FERNET_SECRET_KEY = FERNET_SECRET_KEY.encode()  # convert to bytes
-
-
-
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
 
@@ -226,3 +232,23 @@ EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 # EMAIL_HOST_USER = 'your-email@cientme.com'
 # EMAIL_HOST_PASSWORD = 'your-email-password'
 # DEFAULT_FROM_EMAIL = 'Cientme <no-reply@cientme.com>'
+
+
+
+
+
+
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Kolkata'
+
+CELERY_BEAT_SCHEDULE = {
+    'auto-close-games-every-minute': {
+        'task': 'games.tasks.auto_close_games_task',
+        'schedule': crontab(),  # every 1 min
+    },
+}

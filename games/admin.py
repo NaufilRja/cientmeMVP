@@ -5,7 +5,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from django.db.models import Count
 
-from .models import Game, GameSubmission, GameHistory, WinningNumber, WinnerHistory, RewardMessage
+from .models import Game, GameSubmission, GameHistory, WinningNumber, WinnerHistory, RewardMessage, GameComplaint
 
 # ------------------------
 # --- Inlines
@@ -101,8 +101,9 @@ class WinnerHistoryAdmin(admin.ModelAdmin):
         "claimed_at",
         "reward_delivered",
         "reward_delivery_deadline",
+        'forfeited',
     )
-    list_filter = ("is_claimed", "reward_delivered", "prize_position", "game")
+    list_filter = ("is_claimed", "reward_delivered", "prize_position", "game", 'forfeited',)
     search_fields = ("user__username", "game__title", "number")
     readonly_fields = (
         "user",
@@ -274,3 +275,17 @@ class GameHistoryAdmin(admin.ModelAdmin):
     def total_winners(self, obj):
         return WinnerHistory.objects.filter(game=obj.game).count() if obj.game else 0
     total_winners.short_description = "Total Winners"
+
+
+
+
+@admin.register(GameComplaint)
+class GameComplaintAdmin(admin.ModelAdmin):
+    """
+    Admin panel configuration for complaints.
+    Provides quick visibility into complaints with filtering and search.
+    """
+    list_display = ("id", "user", "winner_history", "created_at")
+    list_filter = ("created_at",)
+    search_fields = ("user__username", "message", "winner_history__game__title")
+    readonly_fields = ("created_at",)

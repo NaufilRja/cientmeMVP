@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from django.utils import timezone
 from .models import (
-    Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, RewardMessage
+    Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, RewardMessage, GameComplaint
+
 )
 from .services.game_fairness import GameFairness
 
@@ -208,6 +209,8 @@ class GameHistorySerializer(serializers.ModelSerializer):
 class WinnerHistorySerializer(serializers.ModelSerializer):
     user_username = serializers.SerializerMethodField()
     game_title = serializers.CharField(source="game_history.title", read_only=True)
+    can_message = serializers.ReadOnlyField()
+    forfeited = serializers.ReadOnlyField()  
 
     class Meta:
         model = WinnerHistory
@@ -218,6 +221,7 @@ class WinnerHistorySerializer(serializers.ModelSerializer):
             'user',
             'user_username',
             'number',
+            'can_message',
             'prize_position',
             'reward_type',
             'reward_description',
@@ -226,6 +230,7 @@ class WinnerHistorySerializer(serializers.ModelSerializer):
             'claimed_at',
             'claim_deadline',
             'reward_delivery_deadline',
+            'forfeited',
         ]
         read_only_fields = [
             'id',
@@ -237,10 +242,14 @@ class WinnerHistorySerializer(serializers.ModelSerializer):
             'claimed_at',
             'claim_deadline',
             'reward_delivery_deadline',
+            'forfeited',
         ]
 
     def get_user_username(self, obj):
         return obj.user.username if obj.user else None
+    
+    def get_can_message(self, obj):
+        return obj.can_message 
 
 
 # -----------------------
@@ -276,3 +285,29 @@ class RewardMessageSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             validated_data["sender"] = request.user
         return super().create(validated_data)
+
+
+
+
+# -----------------------
+# Game Complaint Serializer
+# -----------------------
+class GameComplaintSerializer(serializers.ModelSerializer):
+    """
+    Complaint serializer.
+    - Winners can create complaints.
+    - Admins/staff can view & update complaints.
+    """
+
+    class Meta:
+        model = GameComplaint
+        fields = [
+            "id",
+            "winner_history",
+            "user",
+            "issue",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "user", "created_at", "updated_at"]

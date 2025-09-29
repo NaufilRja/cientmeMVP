@@ -32,46 +32,26 @@ class GameViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        """
-        Return the queryset for active games.
-        Filters:
-        - Only active games (`is_active=True`) that haven't ended (`end_time > now`).
-        - Optionally filter by `reel_id`.
-        """
-        queryset = Game.objects.filter(is_active=True, end_time__gt=timezone.now()).order_by('-created_at')
+        """Return active games, optionally filtered by reel_id (only for list)"""
+        queryset = Game.objects.all().order_by('-created_at')
 
-        reel_id = self.request.query_params.get('reel_id')
-        if reel_id:
-            queryset = queryset.filter(reel_id=reel_id)
+        # Only filter active games for list endpoint
+        if self.action == "list":
+            queryset = queryset.filter(is_active=True)
+            reel_id = self.request.query_params.get('reel_id')
+            if reel_id:
+                queryset = queryset.filter(reel_id=reel_id)
 
         return queryset
-    
 
     def get_object(self):
-        """
-        Return a single game object.
-
-        - For active games: return normally.
-        - If the game is inactive or ended, raise a custom 404 with a friendly message
-        suggesting to check the game history.
-        """
-        game_id = self.kwargs.get("pk")
+        """Return object or custom 404 message"""
         try:
-            # Fetch the game without filtering by active status
-            game = Game.objects.get(pk=game_id)
-        except Game.DoesNotExist:
-            raise exceptions.NotFound(detail="No game matches the given ID.")
+            return super().get_object()
+        except Http404:
+            game_id = self.kwargs.get("pk")
+            raise exceptions.NotFound(detail=f"Game with id {game_id} does not exist.")
 
-        # Check if game is inactive or ended
-        if not game.is_active or game.end_time <= timezone.now():
-            raise exceptions.NotFound(
-                detail="No active game matches the given query, or it may have ended. You can check the game history."
-            )
-
-        return game
-
-        
-    
     def perform_create(self, serializer):
         """Assign creator, set end_time, generate winning numbers with provably fair encryption"""
         user = self.request.user
@@ -244,54 +224,7 @@ class GameHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GameHistorySerializer
     queryset = GameHistory.objects.all().order_by('-completed_at')
     permission_classes = [permissions.AllowAny]
-    
-    def get_queryset(self):
-        """
-        Return GameHistory objects, optionally filtered by:
-        - reel_id (via query param)
-        - creator_id (via query param)
-        """
-        queryset = GameHistory.objects.all().order_by("-created_at")
 
-        # Filters
-        creator_id = self.request.query_params.get("creator_id")
-        game_id = self.request.query_params.get("game_id")
-        winner_id = self.request.query_params.get("winner_id")  # optional filter
-
-        if creator_id:
-            queryset = queryset.filter(game__creator_id=creator_id)
-
-        if game_id:
-            queryset = queryset.filter(game_id=game_id)
-
-        if winner_id:
-            queryset = queryset.filter(all_winners__id=winner_id)  # Assuming you have a M2M or related_name
-
-        return queryset
-
-    # -----------------------
-    # Custom action: by-game
-    # -----------------------
-    @action(detail=True, methods=['get'], url_path='by-game')
-    def by_game(self, request, pk=None):
-        """
-        Return GameHistory for a specific Game ID (pk).
-        """
-        try:
-            game = Game.objects.get(pk=pk)
-        except Game.DoesNotExist:
-            return Response({"detail": "Game not found."}, status=404)
-
-        history_qs = GameHistory.objects.filter(game=game).order_by('-completed_at')
-        if not history_qs.exists():
-            return Response({"detail": "No GameHistory for this Game."}, status=404)
-
-        # Return all histories if multiple exist
-        serializer = self.get_serializer(history_qs, many=True)
-        return Response(serializer.data)
-    
-    
-    
 
 # -----------------------
 # Winner History ViewSet
@@ -370,3 +303,53 @@ class GameComplaintViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You must be following the creator to submit a complaint.")
 
         serializer.save(user=user)
+
+
+
+
+
+
+
+
+
+
+
+****************************************************
+def get_queryset(self):
+        """
+        Return the queryset for active games.
+        Filters:
+        - Only active games (`is_active=True`) that haven't ended (`end_time > now`).
+        - Optionally filter by `reel_id`.
+        """
+        queryset = Game.objects.filter(is_active=True, end_time__gt=timezone.now()).order_by('-created_at')
+
+        reel_id = self.request.query_params.get('reel_id')
+        if reel_id:
+            queryset = queryset.filter(reel_id=reel_id)
+
+        return queryset
+    
+
+    def get_object(self):
+        """
+        Return a single game object.
+
+        - For active games: return normally.
+        - If the game is inactive or ended, raise a custom 404 with a friendly message
+        suggesting to check the game history.
+        """
+        game_id = self.kwargs.get("pk")
+        try:
+            # Fetch the game without filtering by active status
+            game = Game.objects.get(pk=game_id)
+        except Game.DoesNotExist:
+            raise exceptions.NotFound(detail="No game matches the given ID.")
+
+        # Check if game is inactive or ended
+        if not game.is_active or game.end_time <= timezone.now():
+            raise exceptions.NotFound(
+                detail="No active game matches the given query, or it may have ended. You can check the game history."
+            )
+
+        return game

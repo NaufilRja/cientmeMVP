@@ -4,6 +4,8 @@ from django.utils import timezone
 from django.urls import reverse
 from django.utils.html import format_html
 from django.db.models import Count
+from django.core.exceptions import ValidationError
+
 
 from .models import Game, GameSubmission, GameHistory, WinningNumber, WinnerHistory, RewardMessage, GameComplaint
 
@@ -130,6 +132,8 @@ class WinnerHistoryAdmin(admin.ModelAdmin):
         return "-"
     game_link.short_description = "Game"
 
+
+
 # ------------------------
 # --- Game Admin
 # ------------------------
@@ -140,6 +144,7 @@ class GameAdmin(admin.ModelAdmin):
         "creator_link",
         "reward_type",
         "number_of_winners",
+        "external_link",
         "participant_count",
         "is_active",
         "winners_selected",
@@ -151,9 +156,46 @@ class GameAdmin(admin.ModelAdmin):
     actions = ["close_and_select_winners"]
     change_list_template = "admin/game_changelist.html"
 
+    # ------------------------
+    # Read-only fields
+    # ------------------------
+    readonly_fields = (
+        "creator",
+        "participant_count",
+        "is_active",
+        "winners_selected",
+        "created_at",
+        "updated_at",
+        "end_time",
+        "salt",
+        "hash_value",
+        "winning_numbers_encrypted",
+    )
+
+    # Group fields logically for clarity
+    fieldsets = (
+        ("Game Info", {
+            "fields": ("title", "description", "image", "creator", "reward_type", "number_of_winners"),
+            "description": "🎨 Cover Image is optional, used as the game's banner/advertisement. Reward type is optional: first prize or all prizes if same kind."
+        }),
+        ("Prizes", {
+            "fields": (
+                "first_prize_image", "first_prize_link",
+                "second_prize_image", "second_prize_link",
+                "third_prize_image", "third_prize_link",
+            ),
+            "description": "⚡ First prize image is required. Links are optional. Second/Third prize images are optional."
+        }),
+        ("Rules", {"fields": ("guess_min", "guess_max", "reel")}),
+        ("Timing", {"fields": ("duration", "end_time")}),
+        ("Status", {"fields": ("is_active", "auto_close", "auto_select_winner", "winners_selected")}),
+    )
+
+    # ------------------------
+    # Dashboard stats in changelist
+    # ------------------------
     def changelist_view(self, request, extra_context=None):
         extra_context = extra_context or {}
-
         total_games = Game.objects.count()
         active_games = Game.objects.filter(is_active=True).count()
         total_winners = WinnerHistory.objects.count()
@@ -169,19 +211,49 @@ class GameAdmin(admin.ModelAdmin):
         }
         return super().changelist_view(request, extra_context=extra_context)
 
+    # ------------------------
+    # Custom field methods
+    # ------------------------
     def creator_link(self, obj):
         if obj.creator:
             url = reverse("admin:auth_user_change", args=(obj.creator.pk,))
             return format_html('<a href="{}">{}</a>', url, obj.creator.username)
         return "-"
     creator_link.short_description = "Creator"
+    
+    def external_link(self, obj):
+        if obj.link:
+            return format_html('<a href="{}" target="_blank">Visit</a>', obj.link)
+        return "-"
+    external_link.short_description = "Website"
 
+    # ------------------------
+    # Action: close and select winners
+    # ------------------------
     def close_and_select_winners(self, request, queryset):
         updated = 0
-        for game in queryset.filter(is_active=True):
+        for game in queryset.filter(is_active=True).iterator():  # iterator() for large querysets
             game.close_game_and_select_winners()
             updated += 1
         self.message_user(request, f"{updated} game(s) closed and winners selected.", messages.SUCCESS)
+
+    # ------------------------
+    # Validation before save
+    # ------------------------
+    def save_model(self, request, obj, form, change):
+        if not obj.title:
+            raise ValidationError("Game title is required.")
+        if not obj.description:
+            raise ValidationError("Game description is required.")
+        if not obj.first_prize_image:
+            raise ValidationError("First prize image is required before saving the game.")
+        # Optional: allow reward_type to be blank
+        if obj.reward_type is None:
+            obj.reward_type = None
+        super().save_model(request, obj, form, change)
+        
+        
+        
 
 # ------------------------
 # --- GameSubmission Admin (full dashboard)
@@ -226,6 +298,8 @@ class GameSubmissionAdmin(admin.ModelAdmin):
             return format_html('<a href="{}">{}</a>', url, obj.game.title)
         return "-"
     game_link.short_description = "Game"
+    
+    
 
 # ------------------------
 # --- WinningNumber Admin

@@ -12,7 +12,6 @@ from core.utils.validators import validate_image_file_size
 import random
 import string
 import hashlib
-import uuid
 
 
 
@@ -188,32 +187,7 @@ class Game(BaseModel):
                 return
 
         # -----------------------
-        # Submissions
-        # -----------------------
-        submissions = self.submissions.filter(submitted_at__lte=self.end_time).order_by("submitted_at")
-
-        
-
-        # Ensure we have enough numbers
-        if len(decrypted_numbers) < self.number_of_winners:
-            remaining_needed = self.number_of_winners - len(decrypted_numbers)
-            random_subs = submissions.exclude(guessed_number__in=decrypted_numbers)[:remaining_needed]
-            decrypted_numbers.extend([s.guessed_number for s in random_subs])
-
-
-
-        # Ensure we have enough numbers
-        if not decrypted_numbers:
-            # If no encrypted numbers AND no submissions, generate default numbers
-            decrypted_numbers = list(range(self.guess_min, self.guess_min + self.number_of_winners))
-
-        # Convert to string for GameHistory
-        decrypted_numbers_str = ",".join(map(str, decrypted_numbers)) or ""
-
-
-
-        # -----------------------
-        # Create GameHistory AFTER finalizing decrypted_numbers
+        # Create GameHistory with optional reward_type
         # -----------------------
         game_history = GameHistory.objects.create(
             game=self,
@@ -225,14 +199,16 @@ class Game(BaseModel):
             guess_min=self.guess_min,
             guess_max=self.guess_max,
             reel=self.reel,
-            created_at=self.created_at,
-            decrypted_winning_numbers=decrypted_numbers_str 
+            created_at=self.created_at
         )
 
-        # Ensure decrypted numbers are definitely saved
-        game_history.decrypted_winning_numbers = decrypted_numbers_str
-        game_history.save(update_fields=['decrypted_winning_numbers'])
-            
+        submissions = self.submissions.filter(submitted_at__lte=self.end_time).order_by("submitted_at")
+
+        if len(decrypted_numbers) < self.number_of_winners:
+            remaining_needed = self.number_of_winners - len(decrypted_numbers)
+            random_subs = submissions.exclude(guessed_number__in=decrypted_numbers)[:remaining_needed]
+            decrypted_numbers.extend([s.guessed_number for s in random_subs])
+
         position = 1
         for number in decrypted_numbers:
             if position > self.number_of_winners:
@@ -384,6 +360,8 @@ class Game(BaseModel):
         for game in cls.objects.filter(is_active=True, end_time__lte=now, auto_close=True):
             game.close_game_and_select_winners()
             
+            
+   
 
     # ---------------------
     # Provable fairness verification
@@ -463,8 +441,6 @@ class GameSubmission(BaseModel):
 # Game History Model
 # -----------------------
 class GameHistory(BaseModel):
-    id = models.BigAutoField(primary_key=True)
-    public_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     game = models.OneToOneField(Game, on_delete=models.CASCADE, related_name="history")
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     title = models.CharField(max_length=255)
@@ -476,7 +452,7 @@ class GameHistory(BaseModel):
     reel = models.ForeignKey("reels.Reel", on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField()
     completed_at = models.DateTimeField(auto_now_add=True)
-    decrypted_winning_numbers = models.CharField(max_length=255, blank=True, default="")
+    decrypted_winning_numbers = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         verbose_name = "Game History"

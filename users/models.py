@@ -3,7 +3,8 @@ from django.conf import settings
 from core.models.base import BaseModel
 from reels.models import Reel
 from core.utils.validators import validate_image_file_size, validate_http_url
-from core.utils.upload_paths import user_avatar_upload_to
+from core.utils.upload_paths import user_avatar_upload_to, profile_qr_upload_to
+from core.utils.image_utils import compress_image
 from core.constants import BIO_MAX_LENGTH, USERNAME_MAX_LENGTH, EMAIL_MAX_LENGTH
 
 
@@ -224,7 +225,7 @@ class Profile(BaseModel):
     )
    
     qr_code = models.ImageField(
-        upload_to="profile_qrcodes/",
+        upload_to=profile_qr_upload_to,
         blank=True,
         null=True,
         help_text="Optional QR code image for the user."
@@ -274,6 +275,20 @@ class Profile(BaseModel):
     # -----------------------
     total_reach = models.PositiveIntegerField(default=0, help_text="Sum of reach from all user's reels.")
 
+
+    def save(self, *args, **kwargs):
+        """
+        Compress images before saving:
+        - Avatar: max 300x300, quality 75
+        - QR code: max 200x200, quality 75 (small, readable)
+        """
+        if self.avatar:
+            self.avatar = compress_image(self.avatar, max_size=(300, 300), quality=75)
+
+        if self.qr_code:
+            self.qr_code = compress_image(self.qr_code, max_size=(200, 200), quality=75)
+
+        super().save(*args, **kwargs)
     
     def __str__(self):
         """

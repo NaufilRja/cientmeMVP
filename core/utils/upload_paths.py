@@ -22,6 +22,10 @@ def user_avatar_upload_to(instance, filename: str) -> str:
     return os.path.join(dated_path("avatars"), str(user_id), random_filename(filename, prefix="avatar"))
 
 
+def profile_qr_upload_to(instance, filename):
+    """Upload path for user QR codes."""
+    user_id = getattr(instance, "pk", None) or "anon"
+    return os.path.join(dated_path("profile_qrcodes"), str(user_id), random_filename(filename, prefix="qrcode"))
 
 
 def post_media_upload_to(instance, filename: str) -> str:
@@ -43,3 +47,16 @@ def reel_thumbnail_upload_to(instance, filename):
     return os.path.join(dated_path("reel_thumbnails"), str(obj_id), random_filename(filename, prefix="thumbnail"))
 
 
+
+
+def game_reward_upload_to(instance, filename):
+    """Upload path for game/reward images."""
+    obj_id = getattr(instance, "pk", None) or "new"
+    return os.path.join(dated_path("game_rewards"), str(obj_id), random_filename(filename, prefix="reward"))
+
+
+
+def reward_message_upload_to(instance, filename):
+    """Upload path for reward message images."""
+    obj_id = getattr(instance, "pk", None) or "new"
+    return os.path.join(dated_path("reward_messages"), str(obj_id), random_filename(filename, prefix="rewardmsg"))

@@ -3,8 +3,7 @@ from users.serializers import SimpleUserSerializer, UserSerializer
 from .models import Reel, Comment, Share, Audio, Tag
 from moviepy.editor import VideoFileClip
 from core.constants import MAX_VIDEO_SIZE_MB, MAX_DURATION_SEC
-from django.core.exceptions import ValidationError
-
+from games.serializers import GameSerializer
 
 import os
 import tempfile
@@ -126,6 +125,7 @@ class ReelSerializer(serializers.ModelSerializer):
         queryset=Tag.objects.all(), many=True, write_only=True, source='tags'
     )  # for write/update
 
+    games = GameSerializer(many=True, read_only=True)
 
     class Meta:
         model = Reel
@@ -154,6 +154,7 @@ class ReelSerializer(serializers.ModelSerializer):
             'is_ad',
             "is_banned",
             "created_at",
+            "games",
         ]
         read_only_fields = [
             "user",
@@ -171,6 +172,7 @@ class ReelSerializer(serializers.ModelSerializer):
             "views",
             'reach',
             "is_banned",
+            "games",
         ]
 
     # -----------------------

@@ -1,8 +1,6 @@
 from rest_framework import serializers
 from django.conf import settings
 from django.utils import timezone
-from users.serializers import SimpleUserSerializer
-
 from .models import (
     Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, RewardMessage, GameComplaint
 
@@ -10,29 +8,27 @@ from .models import (
 
 
 # -----------------------
-# Game Serializer (Active Games Only)
+# Game Serializer
 # -----------------------
 class GameSerializer(serializers.ModelSerializer):
-    """
-    Serializer for active games that users can participate in.
-
-    Only shows info relevant for ongoing games:
-    - Remaining time
-    - Participation count
-    - Basic game info (title, description, guesses)
-    """
     remaining_time = serializers.SerializerMethodField()
+    winning_numbers = serializers.SerializerMethodField()
     participant_count = serializers.IntegerField(read_only=True)
+    is_finished = serializers.SerializerMethodField()
     is_active = serializers.SerializerMethodField()
+    late_correct_guesses = serializers.SerializerMethodField()
+    all_winners = serializers.SerializerMethodField()
     
+    # -----------------------
     # Optional reward_type
+    # -----------------------
     reward_type = serializers.ChoiceField(
         choices=Game.REWARD_TYPE_CHOICES,
-        required=False,
-        allow_null=True
+        required=False,    # optional
+        allow_null=True    # allow null
     )
-
-    # Images and links
+    
+    # Make image optional
     image = serializers.ImageField(required=False, allow_null=True)
     link = serializers.URLField(required=False, allow_null=True)
     first_prize_image = serializers.ImageField(required=True)
@@ -42,31 +38,174 @@ class GameSerializer(serializers.ModelSerializer):
     reel_id = serializers.IntegerField(source='reel.id', read_only=True)
     reel_title = serializers.CharField(source='reel.title', read_only=True)
 
+    
+
     class Meta:
         model = Game
         fields = [
             'id', 'creator', 'title', 'description', 'image', 'link',
             'reward_type', 'number_of_winners',
-            'guess_min', 'guess_max', 'reel', 'reel_id', 'reel_title',
-            'is_active', 'participant_count',
-            'duration', 'end_time', 'remaining_time',
+            'guess_min', 'guess_max', 'reel', 'reel_id', 'reel_title','is_active', 'participant_count',
+            'winning_numbers', 'duration', 'end_time', 'remaining_time', 'created_at', 
+            'updated_at', 'salt', 'hash_value', 'winning_numbers_encrypted', 'is_finished',
+            'auto_close', 'auto_select_winner', 'winners_selected',
             'first_prize_image', 'first_prize_link',
             'second_prize_image', 'second_prize_link',
             'third_prize_image', 'third_prize_link',
+            "late_correct_guesses",'all_winners',  
         ]
         read_only_fields = [
-            'id', 'creator', 'created_at', 'updated_at',
-            'end_time', 'remaining_time', 'participant_count',
-            'reel_id', 'reel_title', 'is_active'
+            'id', 'creator', 'created_at', 'updated_at', 'end_time', 'remaining_time',
+            'salt', 'hash_value', 'winning_numbers_encrypted', 'participant_count',
+            'is_finished', 'winners_selected', 'is_active',
+            'reel_id', 'reel_title', "late_correct_guesses",'all_winners',  
         ]
 
-    # --------------------------
+    # -----------------------
+    # Custom validation
+    # -----------------------
+    def validate(self, attrs):
+        # Only enforce required fields on create
+        if not self.instance:  # create
+            if not attrs.get('title'):
+                raise serializers.ValidationError("Game title is required.")
+            if not attrs.get('description'):
+                raise serializers.ValidationError("Game description is required.")
+            if not attrs.get('first_prize_image'):
+                raise serializers.ValidationError("First prize image is required.")
+
+        guess_min = attrs.get('guess_min')
+        guess_max = attrs.get('guess_max')
+        if guess_min is not None and guess_min <= 0:
+            raise serializers.ValidationError("'guess_min' must be > 0.")
+        if guess_min is not None and guess_max is not None and guess_max <= guess_min:
+            raise serializers.ValidationError("'guess_max' must be > 'guess_min'.")
+
+        number_of_winners = attrs.get('number_of_winners')
+        if number_of_winners is not None and number_of_winners < 1:
+            raise serializers.ValidationError("'number_of_winners' must be at least 1.")
+
+        return attrs
+
+
+    # ---------------------------------------
+    # validation for reel and game one to one
+    # ---------------------------------------
+    def validate_reel(self, value):
+        if value and Game.objects.filter(reel=value).exists():
+            raise serializers.ValidationError("This reel is already attached to another game.")
+        return value
+
+    # -----------------------
+    # Optional link validation
+    # -----------------------
+    def validate_link(self, value):
+        if value and not (value.startswith("http://") or value.startswith("https://")):
+            raise serializers.ValidationError("Link must start with http:// or https://")
+        return value
+
+    # -----------------------
+    # Create Game Method
+    # -----------------------
+    def create(self, validated_data):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            validated_data['creator'] = request.user
+        return super().create(validated_data)
+
+
+    # --------------------
+    # Update Game Method
+    # --------------------
+    def update(self, instance, validated_data):
+        if instance.submissions.exists():
+            restricted_fields = [
+                'title', 'description', 'image', 'reward_type', 'link',
+                'number_of_winners', 'guess_min', 'guess_max'
+            ]
+            for field in restricted_fields:
+                if field in validated_data:
+                    raise serializers.ValidationError(
+                        f"Cannot update '{field}' because participants have submitted guesses."
+                    )
+        return super().update(instance, validated_data)
+
+    # -----------------------
     # Custom Methods
+    # -----------------------
+    def get_winning_numbers(self, obj):
+        """
+        Returns the actual winning numbers, regardless of whether winners are selected.
+        """
+        if obj.winning_numbers_encrypted:
+            try:
+                # decrypt the numbers
+                from cryptography.fernet import Fernet
+                key = settings.GAME_ENCRYPTION_KEY  # your secret key
+                f = Fernet(key)
+                decrypted = f.decrypt(obj.winning_numbers_encrypted.encode()).decode()
+                # assume stored as comma-separated string: "1,2,3"
+                numbers = [int(n) for n in decrypted.split(',')]
+                return [{"number": n} for n in numbers]
+            except Exception as e:
+                return []  # fail silently if decrypt fails
+        return []
+
+    
+    # -------------------------------
+    # Get Late Correct Guess Methods
+    # ------------------------------
+    def get_late_correct_guesses(self, obj):
+        """
+        Return submissions where users guessed correctly
+        but didn't win (guessed later than the actual winners).
+        """
+        if not obj.winners_selected:
+            return []
+
+        # pull the official winning numbers directly from WinningNumber table
+        winning_numbers = list(obj.winning_numbers.values_list("number", flat=True))
+
+        # collect IDs of actual winners
+        winning_user_ids = list(obj.winning_numbers.values_list("winner_id", flat=True))
+
+        # find submissions that guessed correctly but were not winners
+        late_submissions = obj.submissions.filter(
+            guessed_number__in=winning_numbers
+        ).exclude(user_id__in=winning_user_ids)
+
+        return LateGuessSerializer(
+            late_submissions.order_by("submitted_at"),  # optional: sort by submission time
+            many=True,
+            context=self.context
+        ).data
+
+
+    # -----------------------
+    # Get All Winners Methods
+    # -----------------------
+    def get_all_winners(self, obj):
+        """
+        Returns all winners grouped by prize position
+        """
+        winners_qs = obj.winning_numbers.filter(winner__isnull=False)
+        return [
+            {
+                "id": wn.winner.id,
+                "username": wn.winner.username,
+                "avatar": wn.winner.avatar.url if wn.winner.avatar else None,
+                "winning_number": wn.number,
+                "prize_position": wn.prize_position,
+            }
+            for wn in winners_qs
+        ]
+
+
+
+    # --------------------------
+    # Get Remaining Time Methods
     # --------------------------
     def get_remaining_time(self, obj):
-        """
-        Returns remaining time until game ends.
-        """
         if obj.end_time:
             delta = obj.end_time - timezone.now()
             seconds = max(int(delta.total_seconds()), 0)
@@ -74,11 +213,21 @@ class GameSerializer(serializers.ModelSerializer):
             return {"seconds": seconds, "readable": readable}
         return {"seconds": 0, "readable": "Ended"}
 
+
+     # --------------------------
+    # Get Is Finished Methods
+    # --------------------------
+    def get_is_finished(self, obj):
+        if obj.end_time:
+            return timezone.now() >= obj.end_time
+        return False 
+    
+     
+    # --------------------------
+    # Get Is Active Methods
+    # --------------------------
     def get_is_active(self, obj):
-        """
-        Returns dynamic active status (True if game is ongoing).
-        """
-        return obj.is_active_dynamic  # custom property in model
+        return obj.is_active_dynamic
 
 
 
@@ -87,15 +236,17 @@ class GameSerializer(serializers.ModelSerializer):
 # Winning Number Serializer
 # -----------------------
 class WinningNumberSerializer(serializers.ModelSerializer):
-    winner = SimpleUserSerializer(read_only=True)
+    winner_username = serializers.SerializerMethodField()
+    winner_avatar = serializers.SerializerMethodField()
 
     class Meta:
         model = WinningNumber
         fields = [
             'id', 'number', 'reward_description', 'reward_image', 'reward_link',
-            'reward_type', 'prize_position', 'winner', 'is_claimed',
+            'reward_type', 'prize_position', 'winner',
+            'winner_username', 'winner_avatar', 'is_claimed',
         ]
-        read_only_fields = ['winner', 'is_claimed']
+        read_only_fields = ['winner', 'winner_username', 'winner_avatar', 'is_claimed']
 
     def get_winner_username(self, obj):
         return obj.winner.username if obj.winner else None
@@ -212,140 +363,29 @@ class GameSubmissionSerializer(serializers.ModelSerializer):
 # Late Guees Serializer
 # -----------------------
 class LateGuessSerializer(serializers.ModelSerializer):
-    user = SimpleUserSerializer(read_only=True)
+    username = serializers.CharField(source="user.username", read_only=True)
+    avatar = serializers.SerializerMethodField()
 
     class Meta:
         model = GameSubmission
-        fields = ["id", "user", "guessed_number", "submitted_at"]
+        fields = ["id", "username", "avatar", "guessed_number", "submitted_at"]
+
+    def get_avatar(self, obj):
+        return obj.user.avatar.url if obj.user and getattr(obj.user, "avatar", None) else None
 
 
-   
 
-# ----------------------------------------------------
-# Game History Serializer (Completed / Past Games)
-# ----------------------------------------------------
+# -----------------------
+# Game History Serializer
+# -----------------------
 class GameHistorySerializer(serializers.ModelSerializer):
-    """
-    Serializer for closed/completed games.
-
-    Includes full details:
-    - Winning numbers
-    - All winners
-    - Late correct guesses
-    - Encrypted winning numbers
-    """
-    decrypted_winning_numbers = serializers.SerializerMethodField()
-    late_correct_guesses = serializers.SerializerMethodField()
-    all_winners = serializers.SerializerMethodField()
 
     class Meta:
         model = GameHistory
-        fields = [
-            "id",
-            "public_id",  
-            "game",
-            "creator",
-            "reel",
-            "title",
-            "description",
-            "reward_type",
-            "number_of_winners",
-            "guess_min",
-            "guess_max",
-            "created_at",
-            "completed_at",
-            "updated_at",
-            "decrypted_winning_numbers",
-            "late_correct_guesses",
-            "all_winners",
-            
-            
-        ]
-        read_only_fields = fields
-
-    # --------------------------
-    # Decrypt winning numbers
-    # --------------------------
-    def get_decrypted_winning_numbers(self, obj):
-        """
-        Convert the stored string (e.g., "1,2,3") into a list of dicts:
-        [{"number":1}, {"number":2}, ...]
-        """
-        if obj.decrypted_winning_numbers:
-            try:
-                numbers = [int(n) for n in obj.decrypted_winning_numbers.split(",") if n]
-                return [{"number": n} for n in numbers]
-            except Exception:
-                return []
-        return []
+        fields = '__all__'
+        read_only_fields = '__all__'
 
 
-
-    # --------------------------
-    # Late correct guesses
-    # --------------------------
-    def get_late_correct_guesses(self, obj):
-        """
-        Return submissions that guessed correctly but weren't winners.
-        """
-        game = obj.game
-        if not game.winners_selected:
-            return []
-
-        winning_numbers = list(game.winning_numbers.values_list("number", flat=True))
-        winning_user_ids = list(game.winning_numbers.values_list("winner_id", flat=True))
-
-        late_submissions = game.submissions.filter(
-            guessed_number__in=winning_numbers
-        ).exclude(user_id__in=winning_user_ids)
-
-        return LateGuessSerializer(
-            late_submissions.order_by("submitted_at"),
-            many=True,
-            context=self.context
-        ).data
-
-
-    # --------------------------
-    # All winners
-    # --------------------------
-    def get_all_winners(self, obj):
-        """
-        Return all winners with details.
-        """
-        game = obj.game
-        winners_qs = game.winning_numbers.filter(winner__isnull=False)
-
-        return [
-            {
-                "id": wn.winner.id,
-                "username": wn.winner.username,
-                "avatar": wn.winner.avatar.url if wn.winner.avatar else None,
-                "winning_number": wn.number,
-                "prize_position": wn.prize_position,
-            }
-            for wn in winners_qs
-        ]
-
-
-
-# -----------------------------
-# Public Game History Serializer
-# ------------------------------
-class PublicGameHistorySerializer(serializers.ModelSerializer):
-    winner = SimpleUserSerializer(read_only=True)
-    
-    class Meta:
-        model = GameHistory
-        fields = [
-            'public_id',
-            'game_title',
-            'winner',
-            'reward_description',
-        ]
-
-
-        
 # -----------------------
 # Winner History Serializer
 # -----------------------

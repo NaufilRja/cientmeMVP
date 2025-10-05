@@ -6,6 +6,7 @@ from datetime import timedelta
 from cryptography.fernet import Fernet
 from django.core.mail import send_mail
 from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied
 from core.utils.image_utils import compress_image
 from core.utils.upload_paths import game_reward_upload_to , reward_message_upload_to
 from core.utils.validators import validate_image_file_size
@@ -13,8 +14,9 @@ import random
 import string
 import hashlib
 import uuid
+import logging
 
-
+logger = logging.getLogger(__name__)
 
 # -----------------------
 # GAME MODEL
@@ -134,10 +136,18 @@ class Game(BaseModel):
     auto_select_winner = models.BooleanField(default=True, help_text="Automatically select winners when game closes.")
     winners_selected = models.BooleanField(default=False, help_text="Whether winners have already been selected.")
 
+
+    # -----------------------
+    # Dynamic winner info (for 4th, 5th, 6th… winners)
+    # -----------------------
+    winner_titles = models.JSONField(default=list, blank=True, help_text="Custom titles for winners 4,5,6...")
+    winner_descriptions = models.JSONField(default=list, blank=True, help_text="Custom descriptions for winners 4,5,6...")
+    winner_links = models.JSONField(default=list, blank=True, help_text="Custom reward links for winners 4,5,6...")
+
+
     # ---------------------
     # Save method
     # ---------------------
-
     def save(self, *args, **kwargs):
         if self.duration and not self.end_time:
             self.end_time = timezone.now() + self.duration
@@ -167,10 +177,18 @@ class Game(BaseModel):
     def __str__(self):
         return f"{self.title} (by {self.creator.username})"
 
-    # ---------------------
+    # -----------------------
     # Auto-close and winner selection
-    # ---------------------
+    # -----------------------
     def close_game_and_select_winners(self):
+        # Validation: reward count must match number_of_winners
+        total_rewards = self.rewards.count() if hasattr(self, "rewards") else 0
+        if total_rewards != self.number_of_winners:
+            raise ValidationError(
+                f"Number of rewards ({total_rewards}) does not match number of winners ({self.number_of_winners}). "
+                "Please adjust rewards before closing the game."
+            )
+        
         if not self.auto_close or not self.is_active:
             return
 
@@ -184,43 +202,31 @@ class Game(BaseModel):
                 decrypted_str = fernet.decrypt(self.winning_numbers_encrypted.encode()).decode()
                 decrypted_numbers = [int(n) for n in decrypted_str.split(",")]
             except Exception as e:
-                print(f"Failed to decrypt winning numbers: {e}")
+                logger.error(f"Failed to decrypt winning numbers for game '{self.title}': {e}")
                 return
 
-        # -----------------------
-        # Submissions
-        # -----------------------
         submissions = self.submissions.filter(submitted_at__lte=self.end_time).order_by("submitted_at")
 
-        
-
-        # Ensure we have enough numbers
+        # Ensure enough numbers
         if len(decrypted_numbers) < self.number_of_winners:
             remaining_needed = self.number_of_winners - len(decrypted_numbers)
             random_subs = submissions.exclude(guessed_number__in=decrypted_numbers)[:remaining_needed]
             decrypted_numbers.extend([s.guessed_number for s in random_subs])
 
-
-
-        # Ensure we have enough numbers
         if not decrypted_numbers:
-            # If no encrypted numbers AND no submissions, generate default numbers
             decrypted_numbers = list(range(self.guess_min, self.guess_min + self.number_of_winners))
 
-        # Convert to string for GameHistory
         decrypted_numbers_str = ",".join(map(str, decrypted_numbers)) or ""
 
-
-
         # -----------------------
-        # Create GameHistory AFTER finalizing decrypted_numbers
+        # Create GameHistory
         # -----------------------
         game_history = GameHistory.objects.create(
             game=self,
             creator=self.creator,
             title=self.title,
             description=self.description,
-            reward_type=self.reward_type if self.reward_type else None,  # <-- optional
+            reward_type=self.reward_type if self.reward_type else None,
             number_of_winners=self.number_of_winners,
             guess_min=self.guess_min,
             guess_max=self.guess_max,
@@ -228,11 +234,12 @@ class Game(BaseModel):
             created_at=self.created_at,
             decrypted_winning_numbers=decrypted_numbers_str 
         )
-
-        # Ensure decrypted numbers are definitely saved
         game_history.decrypted_winning_numbers = decrypted_numbers_str
         game_history.save(update_fields=['decrypted_winning_numbers'])
-            
+
+        # -----------------------
+        # Assign winners and rewards
+        # -----------------------
         position = 1
         for number in decrypted_numbers:
             if position > self.number_of_winners:
@@ -240,48 +247,48 @@ class Game(BaseModel):
 
             matched_submissions = submissions.filter(guessed_number=number)
             if not matched_submissions.exists():
-                continue  # no winner for this number
+                logger.info(f"No submission matched winning number {number} for game '{self.title}'.")
+                continue
 
-            # First submission wins
             winner_submission = matched_submissions.first()
 
             # -----------------------
-            # Assign top prize images & links based on position
+            # Determine reward title/description/link dynamically
             # -----------------------
-            if position == 1 and self.first_prize_image:
-                reward_image = self.first_prize_image
-                reward_link = self.first_prize_link
-            elif position == 2 and self.second_prize_image:
-                reward_image = self.second_prize_image
-                reward_link = self.second_prize_link
-            elif position == 3 and self.third_prize_image:
-                reward_image = self.third_prize_image
-                reward_link = self.third_prize_link
+            if position > 3:
+                idx = position - 4  # 0-based index for 4th+ winners
+                reward_title = (self.winner_titles[idx] if idx < len(self.winner_titles) else f"{self.title} - Prize {position}")
+                reward_description = (self.winner_descriptions[idx] if idx < len(self.winner_descriptions) else self.description)
+                reward_link = (self.winner_links[idx] if idx < len(self.winner_links) else None)
             else:
-                reward_image = None
-                reward_link = None
+                reward_title = f"{self.title} - Prize {position}"
+                reward_description = self.description
+                if position == 1:
+                    reward_link = self.first_prize_link
+                elif position == 2:
+                    reward_link = self.second_prize_link
+                elif position == 3:
+                    reward_link = self.third_prize_link
 
             # -----------------------
-            # Create WinningNumber with optional reward_type
+            # Create/Update GameReward
             # -----------------------
-            wn, _ = WinningNumber.objects.get_or_create(
+            gr, _ = GameReward.objects.update_or_create(
                 game=self,
-                number=number,
+                position=position,
                 defaults={
-                    "prize_position": position,
-                    "reward_description": self.description,
-                    "reward_type": self.reward_type if self.reward_type else None,  # <-- optional
-                    "reward_image": reward_image,
+                    "reward_type": self.reward_type if self.reward_type else "product",
+                    "reward_title": reward_title,
+                    "reward_description": reward_description,
                     "reward_link": reward_link,
-                    "winner": winner_submission.user,
+                    "is_claimed": False,
+                    "claimed_at": None,
                 }
             )
-
-            claim_deadline = timezone.now() + timedelta(days=14)
-            reward_delivery_deadline = claim_deadline + timedelta(days=7)
+            logger.info(f"GameReward created/updated for Game '{self.title}' | Position: {position}")
 
             # -----------------------
-            # Create WinnerHistory with optional reward_type
+            # Create WinnerHistory
             # -----------------------
             wh = WinnerHistory.objects.create(
                 game_history=game_history,
@@ -289,75 +296,22 @@ class Game(BaseModel):
                 user=winner_submission.user,
                 number=number,
                 prize_position=position,
-                reward_type=self.reward_type if self.reward_type else None,  # <-- optional
-                reward_description=self.description,
-                reward_image=reward_image,
+                reward_type=self.reward_type if self.reward_type else None,
+                reward_description=reward_description,
                 reward_link=reward_link,
                 claimed_at=None,
                 is_claimed=False,
-                claim_deadline=claim_deadline,
-                reward_delivery_deadline=reward_delivery_deadline,
+                claim_deadline=timezone.now() + timedelta(days=14),
+                reward_delivery_deadline=timezone.now() + timedelta(days=21),
                 reward_delivered=False,
             )
-
-            RewardMessage.objects.create(
-                winner_history=wh,
-                sender=self.creator,
-                message="Reward claiming is now open. Please share delivery details or proof here.",
-                image=None
-            )
-
-            # -----------------------
-            # Send winner email, only display reward_type if provided
-            # -----------------------
-            try:
-                reward_display = f"{self.reward_type} - " if self.reward_type else ""  # <-- optional
-                send_mail(
-                    subject=f"🎉 Congratulations! You won '{self.title}'",
-                    message=(
-                        f"Hello {winner_submission.user.username},\n\n"
-                        f"You are a winner in '{self.title}'!\n"
-                        f"Reward: {reward_display}{self.description}\n"
-                        f"Claim before: {claim_deadline.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        f"Delivery deadline: {reward_delivery_deadline.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        f"Game Link: https://cientme.com/game/{self.id}\n\n"
-                        "You can now use in-app messaging to coordinate with the creator.\n"
-                        "Thank you for playing on Cientme!"
-                    ),
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[winner_submission.user.email],
-                    fail_silently=False,
-                )
-            except Exception as e:
-                print(f"Failed to send winner email: {e}")
+            logger.info(f"WinnerHistory created | User: {winner_submission.user.username} | Game: {self.title} | Position: {position}")
 
             position += 1
 
-        # Notify creator
-        try:
-            send_mail(
-                subject=f"Your game '{self.title}' has ended!",
-                message=(
-                    f"Hello {self.creator.username},\n\n"
-                    f"Your game '{self.title}' on Cientme has officially ended.\n"
-                    f"Participants: {self.participant_count}\n"
-                    f"Winners: {self.number_of_winners}\n\n"
-                    f"Winners have 14 days to claim their prizes.\n"
-                    f"Delivery deadline: 7 days after claim.\n"
-                    f"View the game: https://cientme.com/game/{self.id}\n\n"
-                    "Thank you for using Cientme!"
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[self.creator.email],
-                fail_silently=False,
-            )
-        except Exception as e:
-            print(f"Failed to send creator email: {e}")
-
         self.winners_selected = True
         self.save(update_fields=['winners_selected'])
-
-        
+            
     @property
     def is_finished(self):
         """
@@ -606,6 +560,32 @@ class WinnerHistory(models.Model):
             )
         except Exception as e:
             print(f"❌ Failed to notify winner: {e}")
+            
+            
+    def delete(self, *args, **kwargs):
+        raise PermissionDenied("Winner history cannot be deleted.")    
+
+
+# -----------------------
+# Game Reward Model
+# -----------------------
+class GameReward(models.Model):
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name="rewards")
+    position = models.PositiveIntegerField(help_text="Winner position (1, 2, 3, etc.)")
+    reward_type = models.CharField(max_length=20, choices=Game.REWARD_TYPE_CHOICES)
+    reward_title = models.CharField(max_length=100, help_text="Title or name of the reward")
+    reward_description = models.TextField(blank=True, null=True, help_text="Optional description")
+    reward_link = models.URLField(blank=True, null=True)
+    is_claimed = models.BooleanField(default=False)
+    claimed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        unique_together = ("game", "position")
+
+    def __str__(self):
+        return f"{self.game.title} - Position {self.position} Reward: {self.reward_title}"
+
+
 
 
 # -----------------------

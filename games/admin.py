@@ -309,6 +309,23 @@ class WinningNumberAdmin(admin.ModelAdmin):
     list_display = ("id", "game", "number", "prize_position", "winner", "reward_type")
     list_filter = ("game", "prize_position", "reward_type")
     search_fields = ("number",)
+    
+    
+    
+from django.contrib import admin
+from .models import GameReward
+
+# ------------------------
+# --- Game Reward Admin
+# ------------------------
+@admin.register(GameReward)
+class GameRewardAdmin(admin.ModelAdmin):
+    list_display = ('game', 'position', 'reward_title', 'reward_type', 'is_claimed')
+    list_filter = ('reward_type', 'is_claimed', 'game')
+    search_fields = ('reward_title', 'game__title')
+    readonly_fields = ('is_claimed', 'claimed_at')
+    ordering = ('game', 'position')
+    
 
 # ------------------------
 # --- RewardMessage Admin

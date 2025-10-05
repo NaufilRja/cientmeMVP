@@ -2,11 +2,34 @@ from rest_framework import serializers
 from django.conf import settings
 from django.utils import timezone
 from users.serializers import SimpleUserSerializer
+from reels.models import Reel
+
 
 from .models import (
-    Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, RewardMessage, GameComplaint
+    Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, RewardMessage, GameComplaint, GameReward,
 
 )
+
+
+# -----------------------
+# Helper function to split comma-separated lists
+# -----------------------
+def split_comma_field(value):
+    """
+    If value is a single-item list containing commas, split into a list of strings.
+    """
+    if isinstance(value, list) and len(value) == 1 and ',' in value[0]:
+        return [v.strip() for v in value[0].split(',')]
+    return value
+
+
+# -----------------------
+# Simple Reel Serializer 
+# -----------------------
+class SimpleReelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Reel
+        fields = ["id", "title", "thumbnail"]  # only fields you need
 
 
 # -----------------------
@@ -41,6 +64,25 @@ class GameSerializer(serializers.ModelSerializer):
 
     reel_id = serializers.IntegerField(source='reel.id', read_only=True)
     reel_title = serializers.CharField(source='reel.title', read_only=True)
+    reel_username = serializers.CharField(source='reel.user.username', read_only=True)
+    
+    
+    winner_titles = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        required=False,
+        allow_empty=True
+    )
+    winner_descriptions = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=True
+    )
+    winner_links = serializers.ListField(
+        child=serializers.URLField(),
+        required=False,
+        allow_empty=True
+    )
+    
 
     class Meta:
         model = Game
@@ -48,17 +90,57 @@ class GameSerializer(serializers.ModelSerializer):
             'id', 'creator', 'title', 'description', 'image', 'link',
             'reward_type', 'number_of_winners',
             'guess_min', 'guess_max', 'reel', 'reel_id', 'reel_title',
+            'reel_username',
             'is_active', 'participant_count',
             'duration', 'end_time', 'remaining_time',
             'first_prize_image', 'first_prize_link',
             'second_prize_image', 'second_prize_link',
             'third_prize_image', 'third_prize_link',
+            'winner_titles',
+            'winner_descriptions',
+            'winner_links',
         ]
+        
         read_only_fields = [
             'id', 'creator', 'created_at', 'updated_at',
             'end_time', 'remaining_time', 'participant_count',
             'reel_id', 'reel_title', 'is_active'
         ]
+        
+    
+         # --------------------------
+    # Winner fields validation (Updated)
+    # --------------------------
+    def validate_winner_titles(self, value):
+        return split_comma_field(value)
+
+    def validate_winner_descriptions(self, value):
+        return split_comma_field(value)
+
+    def validate_winner_links(self, value):
+        return split_comma_field(value)
+
+    
+    # --------------------------
+    # Validation
+    # --------------------------
+    def validate_reel(self, value):
+        request_user = self.context['request'].user
+
+        # Only reel owner can attach a game
+        if value.user != request_user:
+            raise serializers.ValidationError(
+                "You can only create a game for your own reel."
+            )
+
+        # Ensure one game per reel (on create)
+        if self.instance is None and Game.objects.filter(reel=value).exists():
+            raise serializers.ValidationError(
+                "A game already exists for this reel."
+            )
+
+        return value
+    
 
     # --------------------------
     # Custom Methods
@@ -81,6 +163,15 @@ class GameSerializer(serializers.ModelSerializer):
         return obj.is_active_dynamic  # custom property in model
 
 
+    # --------------------------
+    # Output representation
+    # --------------------------
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['winner_titles'] = split_comma_field(data.get('winner_titles', []))
+        data['winner_descriptions'] = split_comma_field(data.get('winner_descriptions', []))
+        data['winner_links'] = split_comma_field(data.get('winner_links', []))
+        return data
 
 
 # -----------------------
@@ -220,6 +311,48 @@ class LateGuessSerializer(serializers.ModelSerializer):
 
 
    
+   
+# -----------------------------
+# Public Winner History Serializer
+# ------------------------------
+class PublicWinnerSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="user.username")
+    avatar = serializers.ImageField(source="user.avatar", allow_null=True)
+
+    class Meta:
+        model = WinnerHistory
+        fields = ["id", "username", "avatar", "prize_position", "number"]
+   
+  
+  
+
+# -----------------------------
+# Public Game History Serializer
+# ------------------------------
+class PublicGameHistorySerializer(serializers.ModelSerializer):
+    winner = SimpleUserSerializer(read_only=True)
+    game_title = serializers.CharField(source='game.title', read_only=True)
+    reward_description = serializers.SerializerMethodField()
+
+    
+    class Meta:
+        model = GameHistory
+        fields = [
+            'public_id',
+            'game_title',
+            'winner',
+            'reward_description',
+        ]
+
+    def get_reward_description(self, obj):
+        # obj is GameHistory instance
+        first_winner = obj.winners.first()  # 'winners' is the related_name in WinnerHistory
+        if first_winner:
+            return first_winner.reward_description or ""
+        return ""
+    
+      
+   
 
 # ----------------------------------------------------
 # Game History Serializer (Completed / Past Games)
@@ -236,13 +369,16 @@ class GameHistorySerializer(serializers.ModelSerializer):
     """
     decrypted_winning_numbers = serializers.SerializerMethodField()
     late_correct_guesses = serializers.SerializerMethodField()
-    all_winners = serializers.SerializerMethodField()
+    all_winners = PublicWinnerSerializer(source="winners", many=True, read_only=True)
+    creator = SimpleUserSerializer(read_only=True)   # nested user info
+    reel = SimpleReelSerializer(read_only=True)      # nested reel info (if you have a ree
+
 
     class Meta:
         model = GameHistory
         fields = [
             "id",
-            "public_id",  
+            "public_id",
             "game",
             "creator",
             "reel",
@@ -258,11 +394,8 @@ class GameHistorySerializer(serializers.ModelSerializer):
             "decrypted_winning_numbers",
             "late_correct_guesses",
             "all_winners",
-            
-            
         ]
         read_only_fields = fields
-
     # --------------------------
     # Decrypt winning numbers
     # --------------------------
@@ -306,100 +439,133 @@ class GameHistorySerializer(serializers.ModelSerializer):
         ).data
 
 
-    # --------------------------
-    # All winners
-    # --------------------------
-    def get_all_winners(self, obj):
-        """
-        Return all winners with details.
-        """
-        game = obj.game
-        winners_qs = game.winning_numbers.filter(winner__isnull=False)
-
-        return [
-            {
-                "id": wn.winner.id,
-                "username": wn.winner.username,
-                "avatar": wn.winner.avatar.url if wn.winner.avatar else None,
-                "winning_number": wn.number,
-                "prize_position": wn.prize_position,
-            }
-            for wn in winners_qs
-        ]
-
-
-
-# -----------------------------
-# Public Game History Serializer
-# ------------------------------
-class PublicGameHistorySerializer(serializers.ModelSerializer):
-    winner = SimpleUserSerializer(read_only=True)
     
+# ------------------
+# simple Serializer
+# ------------------
+class SimpleGameSerializer(serializers.ModelSerializer):
     class Meta:
-        model = GameHistory
-        fields = [
-            'public_id',
-            'game_title',
-            'winner',
-            'reward_description',
-        ]
+        model = Game
+        fields = ["id", "title", "description"]  # keep it light
 
 
-        
-# -----------------------
-# Winner History Serializer
-# -----------------------
-class WinnerHistorySerializer(serializers.ModelSerializer):
-    user_username = serializers.SerializerMethodField()
-    game_title = serializers.CharField(source="game_history.title", read_only=True)
-    can_message = serializers.ReadOnlyField()
-    forfeited = serializers.ReadOnlyField()  
+
+# ----------------------------------
+# Public Winner History Serializers
+# ----------------------------------
+
+class PublicWinnerSerializer(serializers.ModelSerializer):
+    """
+    Minimal public serializer — shown to authenticated users 
+    who are neither winners nor creators.
+    """
+    user = SimpleUserSerializer(read_only=True)
+    game = SimpleGameSerializer(source="game_history.game", read_only=True)
 
     class Meta:
         model = WinnerHistory
         fields = [
-            'id',
-            'game_history',
-            'game_title',
-            'user',
-            'user_username',
-            'number',
-            'can_message',
-            'prize_position',
-            'reward_type',
-            'reward_description',
-            'reward_image',
-            'reward_link',
-            'claimed_at',
-            'claim_deadline',
-            'reward_delivery_deadline',
-            'forfeited',
+            "id",
+            "game",
+            "user",
+            "prize_position",
+            "reward_type",
+            "reward_description",
         ]
-        read_only_fields = [
-            'id',
-            'game_history',
-            'game_title',
-            'user',
-            'user_username',
-            'prize_position',
-            'claimed_at',
-            'claim_deadline',
-            'reward_delivery_deadline',
-            'forfeited',
-        ]
-
-    def get_user_username(self, obj):
-        return obj.user.username if obj.user else None
+        read_only_fields = fields
+   
     
-    def get_can_message(self, obj):
-        return obj.can_message 
+# -----------------------
+# Winner History Serializer
+# -----------------------
+class WinnerHistorySerializer(serializers.ModelSerializer):
+    user = SimpleUserSerializer(read_only=True)
+    game = SimpleGameSerializer(source="game_history.game", read_only=True)
+    can_message = serializers.ReadOnlyField()
+    forfeited = serializers.ReadOnlyField()
+
+    minimal_fields = ["user", "prize_position", "number"]
+
+    class Meta:
+        model = WinnerHistory
+        fields = [
+            "id",
+            "game",
+            "user",
+            "number",
+            "can_message",
+            "prize_position",
+            "reward_type",
+            "reward_description",
+            "reward_image",
+            "reward_link",
+            "claimed_at",
+            "claim_deadline",
+            "reward_delivery_deadline",
+            "forfeited",
+        ]
+        read_only_fields = fields
+
+    def to_representation(self, instance):
+        """
+        Dynamic field visibility based on user role:
+        - Creator → full info
+        - Winner (self) → full info of self
+        - Other authenticated → minimal info
+        - Unauthenticated → "login required" message
+        """
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        data = super().to_representation(instance)
+
+        if not user or not user.is_authenticated:
+            return {"detail": "You must be logged in to view winner history."}
+
+        is_creator = instance.game_history.game.creator == user
+        is_self_winner = instance.user == user
+
+        if is_creator or is_self_winner:
+            return data  # full info
+        else:
+            # minimal info for other authenticated users
+            return {k: v for k, v in data.items() if k in self.minimal_fields}
+
 
 
 # -----------------------
-# RewardMessage Serializer
+# Game Reward Serializer
+# -----------------------
+class GameRewardSerializer(serializers.ModelSerializer):
+    game_title = serializers.CharField(source='game.title', read_only=True)
+    
+    # Ensure reward_title is always mandatory
+    reward_title = serializers.CharField(required=True)
+
+    class Meta:
+        model = GameReward
+        fields = [
+            'id',
+            'game',
+            'game_title',  # read-only
+            'position',
+            'reward_type',
+            'reward_title',  # mandatory
+            'reward_description',
+            'reward_link',
+            'is_claimed',
+            'claimed_at',
+        ]
+        read_only_fields = ['is_claimed', 'claimed_at']  # Only modifiable internally
+
+
+
+
+# -----------------------
+# Reward Message Serializer
 # -----------------------
 class RewardMessageSerializer(serializers.ModelSerializer):
     sender_username = serializers.CharField(source='sender.username', read_only=True)
+    
 
     class Meta:
         model = RewardMessage

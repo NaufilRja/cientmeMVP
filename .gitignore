@@ -1,6 +1,7 @@
 # Python
 __pycache__/
-*.pyc
+**/__pycache__/
+**/*.pyc
 *.pyo
 *.pyd
 
@@ -22,3 +23,7 @@ media/
 
 # Environment variables
 .env
+
+
+# text file 
+*.txt

@@ -125,7 +125,7 @@ class ReelSerializer(serializers.ModelSerializer):
         queryset=Tag.objects.all(), many=True, write_only=True, source='tags'
     )  # for write/update
 
-    games = GameSerializer(many=True, read_only=True)
+    games = GameSerializer(read_only=True)
 
     class Meta:
         model = Reel
@@ -286,7 +286,7 @@ class ReelSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-    
+   
     
 # -----------------------
 # Reel Update Serializer

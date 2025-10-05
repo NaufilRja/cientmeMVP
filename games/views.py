@@ -1,12 +1,15 @@
 from rest_framework import(viewsets, permissions, serializers, 
 status, exceptions
 )
+
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.conf import settings
 from django.http import Http404
+from django.db.models import Q
 
 
 from .services.game_fairness import GameFairness
@@ -20,7 +23,8 @@ from .models import (
 from .serializers import (
     GameSerializer, GameSubmissionSerializer,
     WinningNumberSerializer, GameHistorySerializer,
-    WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer
+    WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer, PublicGameHistorySerializer,
+    PublicWinnerSerializer
 )
 
 
@@ -238,45 +242,98 @@ class WinningNumberViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 # -----------------------
-# Game History ViewSet
+# Optional JWT for public access
 # -----------------------
+
+class OptionalJWTAuthentication(JWTAuthentication):
+    """
+    Allow unauthenticated requests without failing.
+    """
+    def authenticate(self, request):
+        try:
+            return super().authenticate(request)
+        except exceptions.AuthenticationFailed:
+            return None  # silently ignore invalid/missing tokens
+
+
+
+
 class GameHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only viewset for GameHistory.
+    - Public users see limited info (PublicGameHistorySerializer)
+    - Authenticated users see full info (GameHistorySerializer)
+    """
     serializer_class = GameHistorySerializer
-    queryset = GameHistory.objects.all().order_by('-completed_at')
-    permission_classes = [permissions.AllowAny]
-    
+    authentication_classes = [OptionalJWTAuthentication]
+    permission_classes = [permissions.AllowAny]  # public by default
+
     def get_queryset(self):
         """
-        Return GameHistory objects, optionally filtered by:
-        - reel_id (via query param)
-        - creator_id (via query param)
+        Return filtered GameHistory queryset safely.
+        Only returns games if relevant filters are passed.
+        Starts empty to prevent exposing all games.
         """
-        queryset = GameHistory.objects.all().order_by("-created_at")
+        queryset = GameHistory.objects.none()  # start empty
+        params = self.request.query_params
 
-        # Filters
-        creator_id = self.request.query_params.get("creator_id")
-        game_id = self.request.query_params.get("game_id")
-        winner_id = self.request.query_params.get("winner_id")  # optional filter
+        # --- Helper to safely convert ID lists to integers ---
+        def valid_int_list(param_list):
+            return [int(x) for x in param_list if x.isdigit()]
 
-        if creator_id:
-            queryset = queryset.filter(game__creator_id=creator_id)
+        # --- Define all filters in one place ---
+        filters = [
+            ("creator_id", "game__creator_id__in", True),
+            ("creator_name", "game__creator__username__in", False),
+            ("winner_id", "all_winners__id__in", True),
+            ("winner_name", "all_winners__username__in", False),
+            ("game_id", "game_id__in", True),
+            ("participant_id", "late_correct_guesses__user__id__in", True),
+            ("participant_name", "late_correct_guesses__user__username__in", False),
+        ]
 
-        if game_id:
-            queryset = queryset.filter(game_id=game_id)
+        # --- Apply filters ---
+        for param_name, lookup, is_id in filters:
+            values = params.getlist(param_name)
+            if not values:
+                continue
 
-        if winner_id:
-            queryset = queryset.filter(all_winners__id=winner_id)  # Assuming you have a M2M or related_name
+            if is_id:
+                values = valid_int_list(values)
+            if not values:
+                continue
 
-        return queryset
+            # If we already have a queryset, filter it further
+            if queryset.exists():
+                queryset = queryset.filter(**{lookup: values})
+            else:
+                # First filter, start a new queryset
+                queryset = GameHistory.objects.filter(**{lookup: values})
+
+        # Remove duplicates
+        queryset = queryset.distinct()
+
+        # Return most recent first
+        return queryset.order_by("-created_at")
+    
+    #--------------------------------
+    #  Get Serializer Class method 
+    #--------------------------------
+    def get_serializer_class(self):
+        """
+        Public serializer for unauthenticated users.
+        Full serializer for authenticated users.
+        """
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return PublicGameHistorySerializer  # hide sensitive info
+        return GameHistorySerializer
 
     # -----------------------
     # Custom action: by-game
     # -----------------------
     @action(detail=True, methods=['get'], url_path='by-game')
     def by_game(self, request, pk=None):
-        """
-        Return GameHistory for a specific Game ID (pk).
-        """
         try:
             game = Game.objects.get(pk=pk)
         except Game.DoesNotExist:
@@ -286,20 +343,48 @@ class GameHistoryViewSet(viewsets.ReadOnlyModelViewSet):
         if not history_qs.exists():
             return Response({"detail": "No GameHistory for this Game."}, status=404)
 
-        # Return all histories if multiple exist
         serializer = self.get_serializer(history_qs, many=True)
         return Response(serializer.data)
-    
-    
-    
+
+
 
 # -----------------------
 # Winner History ViewSet
 # -----------------------
 class WinnerHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Returns winner history based on the requesting user.
+
+    Rules:
+    - Unauthenticated: cannot access.
+    - Creator: sees full details of all winners for their games.
+    - Winner: sees full details of their own winner history.
+    - Other authenticated: sees minimal info (username, prize position, number).
+    """
+
     serializer_class = WinnerHistorySerializer
-    queryset = WinnerHistory.objects.all().order_by('-claimed_at')
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """
+        Returns WinnerHistory objects filtered based on request sender.
+
+        Optional query parameter:
+        - ?game_id=<id> to filter a specific game
+        """
+
+        user = self.request.user
+        game_id = self.request.query_params.get("game_id")
+
+        # Base query: all winner history
+        queryset = WinnerHistory.objects.all().order_by("-claimed_at")
+
+        # Filter by game_id if provided
+        if game_id:
+            queryset = queryset.filter(game_history__game__id=game_id)
+
+        # Keep logic simple: filtering is handled in serializer for who can see full or minimal info
+        return queryset
 
 
 # -----------------------

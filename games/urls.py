@@ -1,8 +1,5 @@
 from django.urls import path, include
-from rest_framework.routers import DefaultRouter
 from rest_framework_nested import routers
-
-
 from .views import (
     GameViewSet,
     GameSubmissionViewSet,
@@ -14,45 +11,41 @@ from .views import (
 )
 
 # -----------------------
-# Router Configuration
+# Main router
 # -----------------------
-# Using DRF's DefaultRouter to automatically generate RESTful routes
-router = DefaultRouter()
+router = routers.DefaultRouter()
 
 # Game management endpoints
-router.register(r'games', GameViewSet, basename='game')  # CRUD for games
+router.register(r'games', GameViewSet, basename='game')
 
-
-# -----------------------
-# Nested router for submissions
-# -----------------------
-games_router = routers.NestedDefaultRouter(router, r'games', lookup='game')
-games_router.register(r'submissions', GameSubmissionViewSet, basename='game-submissions')
-
-
-# Game participation / submissions
-router.register(r'submissions', GameSubmissionViewSet, basename='submission')  # Submit guesses
+# Game submissions (flat route, optional if you still want global access)
+router.register(r'submissions', GameSubmissionViewSet, basename='submission')
 
 # Winning numbers (for reference/admin)
 router.register(r'winning-numbers', WinningNumberViewSet, basename='winningnumber')
 
-# Game history endpoints
+# Game history
 router.register(r'games-history', GameHistoryViewSet, basename='gamehistory')
 
-# Winner history / reward claiming
-router.register(r'winner-history', WinnerHistoryViewSet, basename='winnerhistory')
+# Winner history (filtered internally by user / optional game_id)
+router.register(r'winner-history', WinnerHistoryViewSet, basename='winner-history')
 
-# Reward messages (in-app notifications)
+# Reward messages
 router.register(r'reward-messages', RewardMessageViewSet, basename='rewardmessage')
 
-# Game complaints (only winners can file, admin/staff manage)
+# Game complaints
 router.register(r'game-complaint', GameComplaintViewSet, basename='gamecomplaint')
+
+# -----------------------
+# Nested router for submissions under a specific game
+# -----------------------
+games_router = routers.NestedDefaultRouter(router, r'games', lookup='game')
+games_router.register(r'submissions', GameSubmissionViewSet, basename='game-submissions')
 
 # -----------------------
 # URL Patterns
 # -----------------------
-# Include all router-generated endpoints
 urlpatterns = [
-    path('', include(router.urls)),
-    path('', include(games_router.urls)),
+    path('', include(router.urls)),        # Main routes
+    path('', include(games_router.urls)),  # Nested routes
 ]

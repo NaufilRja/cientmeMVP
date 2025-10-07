@@ -33,6 +33,22 @@ class SimpleReelSerializer(serializers.ModelSerializer):
 
 
 # -----------------------
+# Public Game Serializer 
+# -----------------------
+class PublicGameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Game
+        fields = [
+            'public_id',
+            'title',
+            'description',
+            'image',
+            'link',
+            'reward_type'
+        ]  # only safe/public fields
+
+
+# -----------------------
 # Game Serializer (Active Games Only)
 # -----------------------
 class GameSerializer(serializers.ModelSerializer):
@@ -108,7 +124,7 @@ class GameSerializer(serializers.ModelSerializer):
         ]
         
     
-         # --------------------------
+    # --------------------------
     # Winner fields validation (Updated)
     # --------------------------
     def validate_winner_titles(self, value):
@@ -455,24 +471,12 @@ class SimpleGameSerializer(serializers.ModelSerializer):
 # ----------------------------------
 
 class PublicWinnerSerializer(serializers.ModelSerializer):
-    """
-    Minimal public serializer — shown to authenticated users 
-    who are neither winners nor creators.
-    """
-    user = SimpleUserSerializer(read_only=True)
-    game = SimpleGameSerializer(source="game_history.game", read_only=True)
-
+    username = serializers.CharField(source="user.username")
+    
     class Meta:
         model = WinnerHistory
-        fields = [
-            "id",
-            "game",
-            "user",
-            "prize_position",
-            "reward_type",
-            "reward_description",
-        ]
-        read_only_fields = fields
+        fields = ["id", "username", "prize_position", "reward_type"]
+
    
     
 # -----------------------
@@ -483,8 +487,14 @@ class WinnerHistorySerializer(serializers.ModelSerializer):
     game = SimpleGameSerializer(source="game_history.game", read_only=True)
     can_message = serializers.ReadOnlyField()
     forfeited = serializers.ReadOnlyField()
+    reward_received = serializers.ReadOnlyField()
+    received_at = serializers.ReadOnlyField()
+    
 
     minimal_fields = ["user", "prize_position", "number"]
+    
+    winner_status = serializers.SerializerMethodField()
+    creator_status = serializers.SerializerMethodField()
 
     class Meta:
         model = WinnerHistory
@@ -501,8 +511,12 @@ class WinnerHistorySerializer(serializers.ModelSerializer):
             "reward_link",
             "claimed_at",
             "claim_deadline",
+            "reward_received",
+            "received_at",
             "reward_delivery_deadline",
             "forfeited",
+            "winner_status",
+            "creator_status",
         ]
         read_only_fields = fields
 
@@ -529,6 +543,25 @@ class WinnerHistorySerializer(serializers.ModelSerializer):
         else:
             # minimal info for other authenticated users
             return {k: v for k, v in data.items() if k in self.minimal_fields}
+        
+        
+    def get_winner_status(self, obj):
+        if obj.reward_received:
+            return "Received / Completed"
+        elif obj.reward_delivered:
+            return "Waiting for confirmation"
+        elif obj.is_claimed:
+            return "Claimed"
+        return "Pending"
+
+    def get_creator_status(self, obj):
+        if obj.reward_received:
+            return "Completed / Received"
+        elif obj.reward_delivered:
+            return "Delivered / Sent"
+        elif obj.is_claimed:
+            return "Winner has claimed"
+        return "Pending"    
 
 
 
@@ -565,6 +598,8 @@ class GameRewardSerializer(serializers.ModelSerializer):
 # -----------------------
 class RewardMessageSerializer(serializers.ModelSerializer):
     sender_username = serializers.CharField(source='sender.username', read_only=True)
+    reward_chat_id = serializers.IntegerField(source='reward_chat.id', read_only=True)
+
     
 
     class Meta:
@@ -572,18 +607,29 @@ class RewardMessageSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "winner_history",
+            "reward_chat_id",
             "sender",
             "sender_username",
             "message",
             "image",
             "created_at",
+            "is_system_message",
         ]
-        read_only_fields = ["id", "created_at", "sender", "sender_username"]
+        read_only_fields = ["id", "created_at", "sender", "sender_username", "is_system_message", "reward_chat_id"]
+        
 
     def validate(self, attrs):
         wh = attrs.get("winner_history")
         if wh:
             now = timezone.now()
+            
+            # Stop messaging if reward already delivered
+            if wh.reward_delivered:
+                raise serializers.ValidationError(
+                    "Messaging is no longer allowed because the reward has been delivered."
+                )
+
+            # Existing deadline check
             allowed_until = wh.reward_delivery_deadline or wh.claim_deadline
             if not allowed_until or now > allowed_until:
                 raise serializers.ValidationError("Messaging period has expired.")

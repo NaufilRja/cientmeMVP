@@ -7,7 +7,7 @@ from django.db.models import Count
 from django.core.exceptions import ValidationError
 
 
-from .models import Game, GameSubmission, GameHistory, WinningNumber, WinnerHistory, RewardMessage, GameComplaint
+from .models import Game, GameSubmission, GameHistory, WinningNumber, WinnerHistory, RewardChat, RewardMessage, GameReward, GameComplaint
 
 # ------------------------
 # --- Inlines
@@ -36,7 +36,12 @@ class WinnerHistoryInline(admin.TabularInline):
     can_delete = False
     extra = 0
     show_change_link = True
+    
+    
 
+# ------------------------
+# Reward Message Inline
+# ------------------------
 class RewardMessageInline(admin.StackedInline):
     model = RewardMessage
     fk_name = "winner_history"
@@ -311,9 +316,7 @@ class WinningNumberAdmin(admin.ModelAdmin):
     search_fields = ("number",)
     
     
-    
-from django.contrib import admin
-from .models import GameReward
+
 
 # ------------------------
 # --- Game Reward Admin
@@ -326,6 +329,16 @@ class GameRewardAdmin(admin.ModelAdmin):
     readonly_fields = ('is_claimed', 'claimed_at')
     ordering = ('game', 'position')
     
+
+# ------------------------
+# Reward Chat Admin
+# ------------------------
+@admin.register(RewardChat)
+class RewardChatAdmin(admin.ModelAdmin):
+    list_display = ('creator', 'winner', 'created_at', 'is_active')
+    search_fields = ('creator__username', 'winner__username')
+    list_filter = ('is_active',)
+
 
 # ------------------------
 # --- RewardMessage Admin
@@ -366,7 +379,6 @@ class GameHistoryAdmin(admin.ModelAdmin):
     def total_winners(self, obj):
         return WinnerHistory.objects.filter(game=obj.game).count() if obj.game else 0
     total_winners.short_description = "Total Winners"
-
 
 
 

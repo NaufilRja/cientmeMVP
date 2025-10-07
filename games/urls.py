@@ -7,7 +7,9 @@ from .views import (
     GameHistoryViewSet,
     WinnerHistoryViewSet,
     RewardMessageViewSet,
-    GameComplaintViewSet
+    GameComplaintViewSet,
+    UnplayedGamesListView
+
 )
 
 # -----------------------
@@ -16,7 +18,7 @@ from .views import (
 router = routers.DefaultRouter()
 
 # Game management endpoints
-router.register(r'games', GameViewSet, basename='game')
+router.register(r'active-games', GameViewSet, basename='game')
 
 # Game submissions (flat route, optional if you still want global access)
 router.register(r'submissions', GameSubmissionViewSet, basename='submission')
@@ -39,7 +41,7 @@ router.register(r'game-complaint', GameComplaintViewSet, basename='gamecomplaint
 # -----------------------
 # Nested router for submissions under a specific game
 # -----------------------
-games_router = routers.NestedDefaultRouter(router, r'games', lookup='game')
+games_router = routers.NestedDefaultRouter(router, r'active-games', lookup='game')
 games_router.register(r'submissions', GameSubmissionViewSet, basename='game-submissions')
 
 # -----------------------
@@ -48,4 +50,7 @@ games_router.register(r'submissions', GameSubmissionViewSet, basename='game-subm
 urlpatterns = [
     path('', include(router.urls)),        # Main routes
     path('', include(games_router.urls)),  # Nested routes
+        
+    
+    path('unplayed/', UnplayedGamesListView.as_view(), name='unplayed-games'),
 ]

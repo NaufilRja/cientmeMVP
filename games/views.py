@@ -1,31 +1,34 @@
 from rest_framework import(viewsets, permissions, serializers, 
-status, exceptions
+status, exceptions , generics
 )
 
-from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.conf import settings
-from django.http import Http404
+from django.core.exceptions import FieldError
 from django.db.models import Q
-
+from django.db.models import Count
+from core.utils.auth import OptionalJWTAuthentication
+import logging
 
 from .services.game_fairness import GameFairness
 from .services.game_logic import generate_winning_numbers
 
 from .models import (
     Game, GameSubmission, WinningNumber,
-    GameHistory, WinnerHistory, RewardMessage, GameComplaint
+    GameHistory, WinnerHistory, RewardMessage, GameComplaint, 
 )
 
 from .serializers import (
-    GameSerializer, GameSubmissionSerializer,
-    WinningNumberSerializer, GameHistorySerializer,
-    WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer, PublicGameHistorySerializer,
-    PublicWinnerSerializer
+    GameSerializer, PublicGameSerializer, 
+    GameSubmissionSerializer,WinningNumberSerializer, GameHistorySerializer, WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer, PublicGameHistorySerializer, PublicWinnerSerializer
 )
+
+
+
+logger = logging.getLogger(__name__)
 
 
 # -----------------------
@@ -33,8 +36,21 @@ from .serializers import (
 # -----------------------
 class GameViewSet(viewsets.ModelViewSet):
     serializer_class = GameSerializer
+    authentication_classes = [OptionalJWTAuthentication]
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
+
+    # -----------------------
+    # Dynamic serializer for public vs authenticated users
+    # -----------------------
+    def get_serializer_class(self):  # updated here
+        if self.request.user.is_authenticated:
+            return GameSerializer  # full detail for logged-in users
+        return PublicGameSerializer  # minimal public info for unauthenticated users
+    
+    # ---------------------
+    #  Get Quetryset Method
+    # --------------------- 
     def get_queryset(self):
         """
         Return the queryset for active games.
@@ -50,7 +66,9 @@ class GameViewSet(viewsets.ModelViewSet):
 
         return queryset
     
-
+    # ---------------------
+    #  Get Object Method
+    # ---------------------   
     def get_object(self):
         """
         Return a single game object.
@@ -75,7 +93,9 @@ class GameViewSet(viewsets.ModelViewSet):
         return game
 
         
-    
+    # ------------------------------
+    #  Game Perform Create  Method
+    # ------------------------------
     def perform_create(self, serializer):
         """Assign creator, set end_time, generate winning numbers with provably fair encryption"""
         user = self.request.user
@@ -103,6 +123,9 @@ class GameViewSet(viewsets.ModelViewSet):
         game_instance.winning_numbers_encrypted = encrypted_numbers
         game_instance.save(update_fields=['end_time', 'salt', 'hash_value', 'winning_numbers_encrypted'])
 
+    # ------------------------------
+    #  Game Perform Upadte  Method
+    # ------------------------------
     def perform_update(self, serializer):
         """Restrict updates if participants exist and only allow creator/staff"""
         instance = serializer.instance
@@ -134,7 +157,9 @@ class GameViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
-
+    # ----------------------
+    #  Destroy Method
+    # ----------------------
     def destroy(self, request, *args, **kwargs):
         """Soft-delete game with custom response"""
         instance = self.get_object()
@@ -164,6 +189,29 @@ class GameViewSet(viewsets.ModelViewSet):
 
 
 # -----------------------
+# UnPlayed Game ViewSet
+# -----------------------
+class UnplayedGamesListView(generics.ListAPIView):
+    """
+    Shows all games created by the user that ended without any participants.
+    """
+    serializer_class = GameSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        now = timezone.now()
+        return Game.objects.annotate(
+            participant_count_real=Count('submissions')  # replace 'submissions' with your related_name
+        ).filter(
+            creator=user,
+            participant_count_real=0,
+            end_time__lt=now
+        ).order_by('-created_at')
+
+
+
+# -----------------------
 # Game Submission ViewSet
 # -----------------------
 class GameSubmissionViewSet(viewsets.ModelViewSet):
@@ -176,6 +224,10 @@ class GameSubmissionViewSet(viewsets.ModelViewSet):
             return GameSubmission.objects.all().order_by('submitted_at')
         return GameSubmission.objects.filter(user=user).order_by('submitted_at')
 
+
+    # ----------------------
+    # Perform Create Method
+    # ----------------------
     def perform_create(self, serializer):
         now = timezone.now()
         game = serializer.validated_data.get('game')
@@ -200,7 +252,10 @@ class GameSubmissionViewSet(viewsets.ModelViewSet):
         # Pass user to serializer
         serializer.save(user=self.request.user, submitted_at=now)
         
-
+        
+    # ----------------------
+    #  Mark Winner Method
+    # ----------------------
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
     def mark_winners(self, request, pk=None):
         """Allow admin to mark winners manually"""
@@ -242,111 +297,143 @@ class WinningNumberViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 # -----------------------
-# Optional JWT for public access
+# Game History ViewSet
 # -----------------------
-
-class OptionalJWTAuthentication(JWTAuthentication):
-    """
-    Allow unauthenticated requests without failing.
-    """
-    def authenticate(self, request):
-        try:
-            return super().authenticate(request)
-        except exceptions.AuthenticationFailed:
-            return None  # silently ignore invalid/missing tokens
-
-
-
 
 class GameHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Read-only viewset for GameHistory.
-    - Public users see limited info (PublicGameHistorySerializer)
-    - Authenticated users see full info (GameHistorySerializer)
+
+    - If the request is unauthenticated -> use PublicGameHistorySerializer (minimal)
+    - If authenticated -> use GameHistorySerializer (full)
+    - Supports filtering by:
+        * creator_id (via URL kwargs or via creator_id query param)
+        * game_id (query param)
+        * title (partial match)
+        * winner_name (partial match on WinnerHistory.user.username)
     """
+
+    # Default serializer (will be switched by get_serializer_class)
     serializer_class = GameHistorySerializer
     authentication_classes = [OptionalJWTAuthentication]
     permission_classes = [permissions.AllowAny]  # public by default
 
+    # --------------------------
+    # Helper: validate integer
+    # --------------------------
+    def _valid_int(self, value):
+        return str(value).isdigit()
+
+    # --------------------------
+    # Main queryset builder
+    # --------------------------
     def get_queryset(self):
         """
-        Return filtered GameHistory queryset safely.
-        Only returns games if relevant filters are passed.
-        Starts empty to prevent exposing all games.
+        Build queryset using safe lookups. Start with all GameHistory, then
+        apply creator filter (if in kwargs), then apply optional query params.
         """
-        queryset = GameHistory.objects.none()  # start empty
-        params = self.request.query_params
+        try:
+            qs = GameHistory.objects.all()
+            params = self.request.query_params
 
-        # --- Helper to safely convert ID lists to integers ---
-        def valid_int_list(param_list):
-            return [int(x) for x in param_list if x.isdigit()]
+            # --- Creator filter from kwargs (used for creator profile: /games-history/creator/<id>/ )
+            creator_id = self.kwargs.get("creator_id")
+            if creator_id and self._valid_int(creator_id):
+                qs = qs.filter(game__creator_id=int(creator_id))
 
-        # --- Define all filters in one place ---
-        filters = [
-            ("creator_id", "game__creator_id__in", True),
-            ("creator_name", "game__creator__username__in", False),
-            ("winner_id", "all_winners__id__in", True),
-            ("winner_name", "all_winners__username__in", False),
-            ("game_id", "game_id__in", True),
-            ("participant_id", "late_correct_guesses__user__id__in", True),
-            ("participant_name", "late_correct_guesses__user__username__in", False),
-        ]
+            # --- Optional filters from query params ---
+            game_id = params.get("game_id")
+            if game_id and self._valid_int(game_id):
+                qs = qs.filter(game_id=int(game_id))
 
-        # --- Apply filters ---
-        for param_name, lookup, is_id in filters:
-            values = params.getlist(param_name)
-            if not values:
-                continue
+            title = params.get("title")
+            if title:
+                # search the game title (partial)
+                qs = qs.filter(game__title__icontains=title)
 
-            if is_id:
-                values = valid_int_list(values)
-            if not values:
-                continue
+            winner_name = params.get("winner_name")
+            if winner_name:
+                # IMPORTANT: winners -> related WinnerHistory model, whose user FK is 'user'
+                # so we must look through winners__user__username
+                qs = qs.filter(winners__user__username__icontains=winner_name)
 
-            # If we already have a queryset, filter it further
-            if queryset.exists():
-                queryset = queryset.filter(**{lookup: values})
-            else:
-                # First filter, start a new queryset
-                queryset = GameHistory.objects.filter(**{lookup: values})
+            # Distinct to avoid duplicates when joining across winners/submissions
+            qs = qs.distinct().order_by("-completed_at")
+            return qs
 
-        # Remove duplicates
-        queryset = queryset.distinct()
+        except FieldError as e:
+            # Defensive: don't let a bad lookup crash the server
+            # Return an empty queryset so DRF will return an empty list for the endpoint.
+            # Alternatively you could raise a ValidationError here.
+            # We'll raise a DRF Response with 400 so client sees the problem.
+            raise
 
-        # Return most recent first
-        return queryset.order_by("-created_at")
-    
-    #--------------------------------
-    #  Get Serializer Class method 
-    #--------------------------------
+    # --------------------------
+    # Serializer selection
+    # --------------------------
     def get_serializer_class(self):
         """
-        Public serializer for unauthenticated users.
-        Full serializer for authenticated users.
+        Use public serializer for unauthenticated requests, full serializer otherwise.
         """
         user = self.request.user
         if not user or not user.is_authenticated:
-            return PublicGameHistorySerializer  # hide sensitive info
+            return PublicGameHistorySerializer
         return GameHistorySerializer
 
-    # -----------------------
-    # Custom action: by-game
-    # -----------------------
-    @action(detail=True, methods=['get'], url_path='by-game')
-    def by_game(self, request, pk=None):
-        try:
-            game = Game.objects.get(pk=pk)
-        except Game.DoesNotExist:
-            return Response({"detail": "Game not found."}, status=404)
+    # --------------------------
+    # Extra: endpoint to fetch a creator's history cleanly:
+    # GET /api/games/games-history/creator/<creator_id>/
+    # --------------------------
+    @action(detail=False, methods=['get'], url_path=r'creator/(?P<creator_id>[^/.]+)')
+    def creator_history(self, request, creator_id=None):
+        if not creator_id or not self._valid_int(creator_id):
+            return Response({"detail": "creator_id must be a numeric id."}, status=status.HTTP_400_BAD_REQUEST)
 
-        history_qs = GameHistory.objects.filter(game=game).order_by('-completed_at')
-        if not history_qs.exists():
-            return Response({"detail": "No GameHistory for this Game."}, status=404)
+        queryset = GameHistory.objects.filter(game__creator_id=int(creator_id)).distinct().order_by('-completed_at')
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
-        serializer = self.get_serializer(history_qs, many=True)
-        return Response(serializer.data)
+    # --------------------------
+    # Extra: by-game endpoint (query param)
+    # GET /api/games/games-history/by-game/?game_id=19
+    # --------------------------
+    @action(detail=False, methods=['get'], url_path='by-game')
+    def by_game(self, request):
+        """
+        Return GameHistory for a specific game_id.
+        Handles missing or invalid game IDs safely.
+        """
+        game_id = request.query_params.get('game_id')
 
+        # Validate presence
+        if not game_id:
+            return Response(
+                {"detail": "game_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
+        # Validate numeric value
+        if not game_id.isdigit():
+            return Response(
+                {"detail": "Invalid game_id format. Must be numeric."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check game existence
+        game = Game.objects.filter(id=game_id).first()
+        if not game:
+            return Response(
+                {"detail": "Game not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Fetch related GameHistory
+        qs = GameHistory.objects.filter(game_id=game_id).order_by('-completed_at')
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    
 
 # -----------------------
 # Winner History ViewSet
@@ -363,7 +450,17 @@ class WinnerHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
 
     serializer_class = WinnerHistorySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [OptionalJWTAuthentication]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    
+    
+     # -----------------------
+    # Dynamic serializer for public vs authenticated users
+    # -----------------------
+    def get_serializer_class(self):  # updated here
+        if self.request.user.is_authenticated:
+            return WinnerHistorySerializer  # full detail for logged-in users
+        return PublicWinnerSerializer  # minimal public info for unauthenticated users
 
     def get_queryset(self):
         """
@@ -385,26 +482,160 @@ class WinnerHistoryViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Keep logic simple: filtering is handled in serializer for who can see full or minimal info
         return queryset
+    
+    
+    # -----------------------------
+    #  Winner claims their reward
+    # -----------------------------
+    @action(detail=True, methods=['post'], url_path='claim', permission_classes=[permissions.IsAuthenticated])
+    def claim_reward(self, request, pk=None):
+        """
+        Endpoint for the winner to claim their reward.
+        POST /api/winner-history/<id>/claim/
+        """
+        try:
+            winner_history = self.get_object()
+
+            # Ensure only the actual winner can claim their reward
+            if winner_history.user != request.user:
+                return Response(
+                    {"detail": "You are not allowed to claim this reward."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # NEW: Prevent claiming if winner already confirmed receipt
+            if winner_history.reward_received:
+                return Response(
+                    {"detail": "Reward has already been confirmed received. Cannot claim again or dispute."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Attempt reward claim using model method
+            winner_history.claim_reward()
+
+            return Response(
+                {"detail": "Reward successfully claimed!"},
+                status=status.HTTP_200_OK
+            )
+
+        except ValueError as e:
+            # Expected model-level validation (e.g., already claimed, expired)
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            # Log unexpected errors for debugging and monitoring
+            logger.exception(f"Unexpected error during reward claim for WinnerHistory ID {pk}")
+            # Remove this print after testing (kept for local debug)
+            print(f"[DEBUG] Error claiming reward: {e}")  # ← remove later after verifying logs
+            return Response(
+                {"detail": "An unexpected error occurred while claiming the reward."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+            
+    @action(detail=True, methods=['post'], url_path='deliver', permission_classes=[permissions.IsAuthenticated])
+    def mark_delivered(self, request, pk=None):
+        winner_history = self.get_object()
+        
+        if request.user != winner_history.game_history.game.creator:
+            return Response({"detail": "Only the creator can mark as delivered."}, status=403)
+        
+        try:
+            winner_history.mark_delivered()  # call the model method
+            return Response({"detail": "Reward marked as delivered!"}, status=200)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+            
+        
+    # -----------------------------------------
+    #  Winner confirms it received the reward
+    # -----------------------------------------     
+    @action(detail=True, methods=["post"], url_path="confirm-receipt")
+    def confirm_receipt(self, request, pk=None):
+        """
+        Winner confirms they received the reward.
+        Only allowed if reward was claimed and delivered by creator.
+        """
+        winner_history = self.get_object()
+
+        if winner_history.user != request.user:
+            return Response({"detail": "You are not the winner of this reward."}, status=403)
+
+        if not winner_history.is_claimed:
+            return Response({"detail": "Reward must be claimed first."}, status=400)
+
+        if not winner_history.reward_delivered:
+            return Response({"detail": "Reward has not been marked as delivered by creator yet."}, status=400)
+        
+
+        # Prevent duplicate confirmation
+        if winner_history.reward_received:
+            return Response({"detail": "Reward already confirmed received. No further actions allowed."}, status=400)
+
+        winner_history.reward_received = True
+        winner_history.received_at = timezone.now()
+        winner_history.save(update_fields=["reward_received", "received_at"])
+
+        return Response({"detail": "Reward receipt confirmed!"})        
 
 
 # -----------------------
 # RewardMessage ViewSet
 # -----------------------
 class RewardMessageViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet to handle RewardMessage CRUD operations.
+
+    Features:
+    - Returns messages for the logged-in user (winner) or creator of the game.
+    - Supports optional filtering by reward_chat (specific chat thread).
+    - Supports optional filtering by system messages (is_system_message).
+    - Messages are ordered chronologically by creation time.
+    """
     serializer_class = RewardMessageSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    
+
     def get_queryset(self):
-        """Return messages only for sender or winner/creator"""
+        """
+        Return RewardMessages for current user with optional filters:
+        - reward_chat
+        - is_system_message
+        """
         user = self.request.user
-        return RewardMessage.objects.filter(
-            winner_history__user=user
-        ) | RewardMessage.objects.filter(
-            winner_history__game_history__creator=user
+
+        # Base queryset: messages where user is winner or game creator
+        queryset = RewardMessage.objects.filter(
+            Q(winner_history__user=user) | Q(winner_history__game_history__creator=user)
         )
 
+        # Filter by specific chat if provided
+        reward_chat_id = self.request.query_params.get("reward_chat")
+        if reward_chat_id:
+            queryset = queryset.filter(reward_chat_id=reward_chat_id)
+
+        # Filter by system messages if provided
+        is_system = self.request.query_params.get("is_system_message")
+        if is_system is not None:
+            if is_system.lower() == "true":
+                queryset = queryset.filter(is_system_message=True)
+            elif is_system.lower() == "false":
+                queryset = queryset.filter(is_system_message=False)
+
+        return queryset.order_by("created_at")
+
+
     def perform_create(self, serializer):
-        """Validate permission and assign sender"""
+        """
+        Validate permission and assign sender before creating a message.
+
+        Only the winner or the creator of the game can send messages
+        for a given reward.
+
+        Raises:
+            PermissionDenied: if the logged-in user is not allowed to send this message.
+        """
         wh = serializer.validated_data.get("winner_history")
         user = self.request.user
 
@@ -415,9 +646,8 @@ class RewardMessageViewSet(viewsets.ModelViewSet):
 
 
 
-
 # -----------------------
-# Winner History ViewSet
+# Game Complaint ViewSet
 # -----------------------
 class GameComplaintViewSet(viewsets.ModelViewSet):
     """

@@ -458,6 +458,8 @@ class WinnerHistory(models.Model):
     claim_deadline = models.DateTimeField(blank=True, null=True)
     reward_delivery_deadline = models.DateTimeField(blank=True, null=True)
     reward_delivered = models.BooleanField(default=False)
+    reward_received = models.BooleanField(default=False, help_text="Winner confirms they received the reward.")
+    received_at = models.DateTimeField(blank=True, null=True)
     forfeited = models.BooleanField(default=False, help_text="Marks if the reward was not claimed in time.")
 
 
@@ -490,12 +492,20 @@ class WinnerHistory(models.Model):
 
         # 1️ Followers-only claim check
         if self.user not in self.game.creator.profile.followers.all():
-            # Notify in-app
+            chat, _ = RewardChat.objects.get_or_create(
+                creator=self.game.creator,
+                winner=self.user
+            )
+            
+            chat.is_active = True  # reactivate chat when new reward claim starts
+            chat.save() 
+            
             RewardMessage.objects.create(
+                reward_chat=chat,
                 winner_history=self,
                 sender=self.game.creator,
-                message="⚠️ You cannot claim this reward because you are not a follower. Reward forfeited.",
-                image=None
+                message="You cannot claim this reward because you are not a follower. Reward forfeited.",
+                is_system_message=True
             )
             raise ValueError("You must be following the creator to claim the reward. Reward forfeited.")
 
@@ -503,7 +513,19 @@ class WinnerHistory(models.Model):
         if self.claim_deadline and now > self.claim_deadline:
             self.forfeited = True
             self.save(update_fields=['forfeited'])
-            raise ValueError("Claim period has expired. Reward forfeited.")
+
+            chat, _ = RewardChat.objects.get_or_create(
+                creator=self.game.creator,
+                winner=self.user
+            )
+            RewardMessage.objects.create(
+                reward_chat=chat,
+                winner_history=self,
+                sender=self.game.creator,
+                message=" Claim period expired. Reward forfeited.",
+                is_system_message=True
+            )
+            raise ValueError("Claim period has expired. Reward forfeited.")  #  required
 
         # 3️ Proceed with claim
         self.is_claimed = True
@@ -515,22 +537,26 @@ class WinnerHistory(models.Model):
         try:
             send_mail(
                 subject=f"Reward claimed by {self.user.username}",
-                message=f"Winner {self.user.username} has claimed their reward for '{self.game_history.title}'. Deliver before {self.reward_delivery_deadline.strftime('%Y-%m-%d %H:%M:%S')}.",
+                message=f"Winner {self.user.username} has claimed their reward for '{self.game.title}'. Deliver before {self.reward_delivery_deadline.strftime('%Y-%m-%d %H:%M:%S')}.",
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[self.game_history.creator.email],
+                recipient_list=[self.game.creator.email],
                 fail_silently=True,
             )
         except Exception as e:
-            print(f" Failed to notify creator: {e}")
+            logger.warning(f"Failed to notify creator about reward claim: {e}")
 
         # 5️ Create in-app reward message confirming claim
+        chat, _ = RewardChat.objects.get_or_create(
+            creator=self.game.creator,
+            winner=self.user
+        )
         RewardMessage.objects.create(
+            reward_chat=chat,
             winner_history=self,
             sender=self.user,
-            message=" I have claimed my reward.",
-            image=None
+            message="I have claimed my reward.",
+            is_system_message=True
         )
-
 
     def mark_delivered(self):
         if not self.is_claimed:
@@ -542,26 +568,41 @@ class WinnerHistory(models.Model):
 
         self.reward_delivered = True
         self.save(update_fields=['reward_delivered'])
-
-        RewardMessage.objects.create(
-            winner_history=self,
-            sender=self.game_history.creator,
-            message="📦 Reward has been delivered by the creator.",
-            image=None
+        
+        # Block the chat after delivery
+        chat, _ = RewardChat.objects.get_or_create(
+            creator=self.game.creator,
+            winner=self.user
         )
+        chat.is_active = False  # block chat
+        chat.save()
 
+
+        # Create in-app system message
+        try:
+            RewardMessage.objects.create(
+                reward_chat=chat,
+                winner_history=self,
+                sender=self.game.creator,
+                message="Reward has been delivered by the creator.",
+                is_system_message=True
+            )
+        except Exception as e:
+            logger.warning(f"Could not send reward message: {e}")
+
+        # Send email notification to winner
         try:
             send_mail(
-                subject=f"Your reward for '{self.game_history.title}' has been delivered!",
-                message=f"Hello {self.user.username},\n\nThe creator has marked your reward as delivered for '{self.game_history.title}'.",
+                subject=f"Your reward for '{self.game.title}' has been delivered!",
+                message=f"Hello {self.user.username},\n\nThe creator has marked your reward as delivered for '{self.game.title}'.",
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[self.user.email],
                 fail_silently=True,
             )
         except Exception as e:
-            print(f"❌ Failed to notify winner: {e}")
-            
-            
+            logger.error(f"Failed to send reward delivery email to {self.user.email}: {e}")
+
+                
     def delete(self, *args, **kwargs):
         raise PermissionDenied("Winner history cannot be deleted.")    
 
@@ -589,14 +630,79 @@ class GameReward(models.Model):
 
 
 # -----------------------
+# Game Complaint Model
+# -----------------------
+class RewardChat(models.Model):
+    creator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="created_reward_chats"
+    )
+    winner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="won_reward_chats"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ('creator', 'winner')
+
+    def __str__(self):
+        return f"Chat between {self.creator} and {self.winner}"
+
+
+# -----------------------
 # Reward Message Model
 # -----------------------
 class RewardMessage(models.Model):
-    winner_history = models.ForeignKey(WinnerHistory, on_delete=models.CASCADE, related_name="messages")
-    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    """
+    Represents a message between the game creator and the winner.
+    Supports continuous chat across multiple games (same creator-winner pair).
+    """
+
+    # link to shared chat thread (creator-winner pair)
+    reward_chat = models.ForeignKey(
+        RewardChat,
+        on_delete=models.CASCADE,
+        null=True,       # allow existing messages to stay valid
+        blank=True,
+        related_name="messages",
+        help_text="Chat thread between creator and winner"
+    )
+
+
+    #  Optional: still keep reference to the specific game history
+    winner_history = models.ForeignKey(
+        "WinnerHistory",
+        on_delete=models.CASCADE,
+        related_name="messages"
+    )
+
+    # Optional: direct link to Game for cross-game referencing
+    game = models.ForeignKey(
+        "Game",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reward_messages"
+    )
+
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE
+    )
+
     message = models.TextField(blank=True, null=True)
-    image = models.ImageField(upload_to=reward_message_upload_to, blank=True, null=True, validators=[validate_image_file_size])
+    image = models.ImageField(
+        upload_to=reward_message_upload_to,
+        blank=True,
+        null=True,
+        validators=[validate_image_file_size]
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+    is_system_message = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         if not self.winner_history or not self.sender:
@@ -607,7 +713,6 @@ class RewardMessage(models.Model):
 
         # Determine if messaging is allowed
         messaging_allowed = True
-
         if wh.reward_delivered:
             messaging_allowed = False
         elif wh.claim_deadline and not wh.is_claimed and now > wh.claim_deadline:
@@ -617,6 +722,9 @@ class RewardMessage(models.Model):
             raise ValueError("Messaging is no longer allowed for this winner.")
 
         super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Message from {self.sender} in chat {self.reward_chat_id}"
 
 
 

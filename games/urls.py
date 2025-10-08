@@ -8,7 +8,8 @@ from .views import (
     WinnerHistoryViewSet,
     RewardMessageViewSet,
     GameComplaintViewSet,
-    UnplayedGamesListView
+    UnplayedGamesListView,
+    ChatListView
 
 )
 
@@ -53,4 +54,5 @@ urlpatterns = [
         
     
     path('unplayed/', UnplayedGamesListView.as_view(), name='unplayed-games'),
+    path('reward-chat-list/', ChatListView.as_view(), name='reward-chat-list'),
 ]

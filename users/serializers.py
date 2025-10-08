@@ -112,6 +112,8 @@ class UserSerializer(serializers.ModelSerializer):
 # Simple User Serializer
 # -----------------------
 class SimpleUserSerializer(serializers.ModelSerializer):
+    avatar = serializers.ImageField(required=False, allow_null=True)
+    
     class Meta:
         model = User
         fields = [

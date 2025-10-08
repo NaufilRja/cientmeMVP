@@ -1,16 +1,17 @@
 from rest_framework import(viewsets, permissions, serializers, 
-status, exceptions , generics
+status, exceptions , generics, views
 )
 
+from django.db import models
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.conf import settings
 from django.core.exceptions import FieldError
-from django.db.models import Q
-from django.db.models import Count
+from django.db.models import OuterRef, Subquery, Count, Max, F, Q, IntegerField
 from core.utils.auth import OptionalJWTAuthentication
+from core.pagination import StandardCursorPagination
 import logging
 
 from .services.game_fairness import GameFairness
@@ -18,12 +19,13 @@ from .services.game_logic import generate_winning_numbers
 
 from .models import (
     Game, GameSubmission, WinningNumber,
-    GameHistory, WinnerHistory, RewardMessage, GameComplaint, 
+    GameHistory, WinnerHistory, RewardMessage, RewardChat, GameComplaint, 
 )
 
 from .serializers import (
     GameSerializer, PublicGameSerializer, 
-    GameSubmissionSerializer,WinningNumberSerializer, GameHistorySerializer, WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer, PublicGameHistorySerializer, PublicWinnerSerializer
+    GameSubmissionSerializer,WinningNumberSerializer, GameHistorySerializer, WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer, PublicGameHistorySerializer, PublicWinnerSerializer,
+    ChatListSerializer
 )
 
 
@@ -594,6 +596,7 @@ class RewardMessageViewSet(viewsets.ModelViewSet):
     """
     serializer_class = RewardMessageSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = StandardCursorPagination
 
     
 
@@ -645,6 +648,50 @@ class RewardMessageViewSet(viewsets.ModelViewSet):
         serializer.save(sender=user)
 
 
+
+# --------------------------
+# Reward Chat List View
+# --------------------------
+
+class ChatListView(views.APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = StandardCursorPagination
+
+    def get(self, request):
+        user = request.user
+        query = request.GET.get("q", "")
+
+        # Base queryset: all chats where user is creator or winner
+        chats = RewardChat.objects.filter(Q(creator=user) | Q(winner=user)).prefetch_related(
+            "messages", "creator", "winner"
+        )
+
+        # Search filter
+        if query:
+            chats = chats.filter(
+                Q(creator__username__icontains=query) |
+                Q(winner__username__icontains=query)
+            )
+
+        # Subquery for unread messages count
+        unread_subquery = RewardMessage.objects.filter(
+            reward_chat=OuterRef('pk')
+        ).exclude(sender=user).values('reward_chat').annotate(
+            count=Count('id')
+        ).values('count')
+
+        # Annotate queryset with unread_count and last_message_time
+        chats = chats.annotate(
+            unread_count=Subquery(unread_subquery, output_field=IntegerField()),
+            last_message_time=Max('messages__created_at')
+        ).order_by('-unread_count', F('last_message_time').desc(nulls_last=True))
+
+        # Pagination (now works because chats is still a QuerySet)
+        paginator = self.pagination_class()
+        paginated_chats = paginator.paginate_queryset(chats, request)
+
+        serializer = ChatListSerializer(paginated_chats, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
 
 # -----------------------
 # Game Complaint ViewSet

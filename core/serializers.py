@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from reels.models import Reel
 from games.models import GameHistory, WinnerHistory, RewardMessage
+from users.serializers import SimpleUserSerializer
 
 User = get_user_model()
 
@@ -61,25 +62,25 @@ class ReelSearchSerializer(serializers.ModelSerializer):
 
 
 
-# -----------------------
-#  Serializer
-# -----------------------
-class GameHistorySerializer(serializers.ModelSerializer):
+# --------------------------------
+# Game History Search Serializer
+# --------------------------------
+class GameHistorySearchSerializer(serializers.ModelSerializer):
     class Meta:
         model = GameHistory
         fields = ['id', 'title', 'description', 'reward_type', 'created_at', 'number_of_winners']
 
 
 
-class WinnerHistorySerializer(serializers.ModelSerializer):
-    username = serializers.CharField(source='user.username', read_only=True)
+# --------------------------------
+# Winner History Search Serializer
+# --------------------------------
+class WinnerHistorySearchSerializer(serializers.ModelSerializer):
+    user = SimpleUserSerializer(read_only=True)
 
     class Meta:
         model = WinnerHistory
-        fields = ['id', 'user', 'username', 'game', 'claimed', 'reward_delivered', 'created_at']
+        fields = ['id', 'user', 'prize_position']
 
 
-class RewardMessageSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = RewardMessage
-        fields = "__all__"  # or list all required fields
+

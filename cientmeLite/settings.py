@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv  # make sure python-dotenv is installed
 from celery.schedules import crontab
+from datetime import timedelta
 
 
 
@@ -179,10 +180,12 @@ REST_FRAMEWORK = {
     
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,  # number of items per page
+    'EXCEPTION_HANDLER': 'core.utils.custom_exceptions.custom_exception_handler',
 }
 
 
-from datetime import timedelta
+
+
 
 
 

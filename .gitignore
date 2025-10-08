@@ -1,5 +1,4 @@
 # Python
-__pycache__/
 **/__pycache__/
 **/*.pyc
 *.pyo
@@ -13,17 +12,11 @@ env/
 *.sqlite3
 *.log
 staticfiles/
-media/
+media/  # keep this ignored unless you want to track uploaded files
 
 # IDEs
 .vscode/
 .idea/
 
-
-
 # Environment variables
 .env
-
-
-# text file 
-*.txt

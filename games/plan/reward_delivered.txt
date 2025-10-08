@@ -1,0 +1,27 @@
+[Winner sees reward] 
+        |
+        v
+[Claim Reward] <-- only winner, must be before claim_deadline
+        |
+        v
+[Reward is claimed]
+  - is_claimed = True
+  - claimed_at = NOW
+  - reward_delivery_deadline = claimed_at + X days
+        |
+        v
+[Creator delivers reward] <-- only creator, must be before reward_delivery_deadline
+        |
+        v
+[Reward is delivered]
+  - reward_delivered = True
+  - delivery timestamp logged
+        |
+        v
+[Winner confirms receipt] <-- only winner, after delivery
+        |
+        v
+[Reward is received & finalized]
+  - reward_received = True
+  - received_at = NOW
+  - No further claims/disputes allowed

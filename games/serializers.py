@@ -3,10 +3,11 @@ from django.conf import settings
 from django.utils import timezone
 from users.serializers import SimpleUserSerializer
 from reels.models import Reel
+from django.db.models import Q
 
 
 from .models import (
-    Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, RewardMessage, GameComplaint, GameReward,
+    Game, WinningNumber, GameSubmission, GameHistory, WinnerHistory, GameReward, RewardMessage, RewardChat, GameComplaint 
 
 )
 
@@ -643,6 +644,75 @@ class RewardMessageSerializer(serializers.ModelSerializer):
 
 
 
+# -----------------------
+# Chat List Serializer
+# -----------------------
+class ChatListSerializer(serializers.ModelSerializer):
+    other_user = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    last_message_time = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+    last_message_status = serializers.SerializerMethodField()  # single/double tick
+
+    class Meta:
+        model = RewardChat
+        fields = [
+            "id",
+            "other_user",
+            "last_message",
+            "last_message_time",
+            "unread_count",
+            "last_message_status"
+        ]
+
+    def get_other_user(self, obj):
+        request_user = self.context["request"].user
+        other = obj.winner if obj.creator == request_user else obj.creator
+        return SimpleUserSerializer(other, context=self.context).data
+
+    def get_last_message(self, obj):
+        last_msg = obj.messages.order_by("-created_at").first()
+        if not last_msg:
+            return None
+        # Show preview for text or image
+        if last_msg.message:
+            return last_msg.message[:50]  # limit to first 50 chars
+        elif last_msg.image:
+            return "📷 Image"
+        return None
+
+    def get_last_message_time(self, obj):
+        last_msg = obj.messages.order_by("-created_at").first()
+        return last_msg.created_at if last_msg else None
+
+    def get_unread_count(self, obj):
+        request_user = self.context["request"].user
+        # Count messages from the other user that are not read
+        return obj.messages.filter(
+            ~Q(sender=request_user),
+            is_read=False
+        ).count()
+
+    def get_last_message_status(self, obj):
+        """
+        Return last message status for the logged-in user:
+        - "single" = delivered but not read
+        - "double" = read
+        - None = last message is from the logged-in user
+        """
+        last_msg = obj.messages.order_by("-created_at").first()
+        if not last_msg:
+            return None
+
+        request_user = self.context["request"].user
+        if last_msg.sender == request_user:
+            return None  # we only show tick status for messages sent to the user
+
+        if last_msg.is_read:
+            return "double"
+        elif last_msg.is_delivered:
+            return "single"
+        return None
 
 # -----------------------
 # Game Complaint Serializer

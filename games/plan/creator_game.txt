@@ -1,0 +1,39 @@
+Yes, I get exactly what you’re saying — let me rephrase it in a clear, structured way so we’re on the same page:
+
+---
+
+### 🎯 Your Idea Summary
+
+1. **Game display on reels vs game list:**
+
+   * **Reels:** Users scroll through reels, and each reel is **attached to a game**.
+   * **Avoid showing all games in a single list** on reels, because that may distract users from watching the reel content. You want reels to be the main attention point, not the game list.
+
+2. **Active Games on User Profiles:**
+
+   * On a **user profile**, you show **“Active Games”** separately.
+   * **If the user has only one active game**, show just that game.
+   * **If the user has multiple active games**, show them all in the list with the label **“Active Games”**.
+   * Each game also has its **game history** and **winner history**, which are visible on the profile.
+
+3. **Behavior for watching reels:**
+
+   * After a user watches a reel, they can see the attached game in context.
+   * If the user wants to see **all active games or their game history**, they can visit their profile or the dedicated list.
+   * Only **active games** are playable.
+   * **Closed games** appear in **game history**, and users can view details and winners but cannot play.
+
+---
+
+### ✅ Benefits of This Approach
+
+* Keeps **reels focused** and engaging. Users watch content first, then optionally engage with the game.
+* Profiles serve as the **central hub** for all game-related info: active games, game history, winners.
+* Avoids **clutter** on main reels feed or a single “all games” page.
+* Makes it easy to **track participation** and **winner history** per user.
+
+---
+
+If you want, I can draw a **mini flow diagram** of this idea showing how reels, active games, and history interact — it will make it super clear for implementation.
+
+Do you want me to do that?

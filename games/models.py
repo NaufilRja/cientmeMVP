@@ -701,6 +701,8 @@ class RewardMessage(models.Model):
         null=True,
         validators=[validate_image_file_size]
     )
+    is_delivered = models.BooleanField(default=False)
+    is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     is_system_message = models.BooleanField(default=False)
 

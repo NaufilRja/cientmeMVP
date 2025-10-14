@@ -4,6 +4,10 @@ from django.utils import timezone
 from users.serializers import SimpleUserSerializer
 from reels.models import Reel
 from django.db.models import Q
+from core.utils.user_online import is_user_online
+from rest_framework import views, permissions
+from rest_framework.response import Response
+
 
 
 from .models import (
@@ -593,66 +597,162 @@ class GameRewardSerializer(serializers.ModelSerializer):
 
 
 
+# ---------------------------
+# Claimed Winner Serializer
+# ---------------------------
+class ClaimedWinnerSerializer(serializers.ModelSerializer):
+    user = SimpleUserSerializer(read_only=True)  # use your existing serializer
+    game_title = serializers.CharField(source="game.title", read_only=True)
+    reward_info = serializers.SerializerMethodField()
+    is_messaged = serializers.SerializerMethodField()
 
-# -----------------------
-# Reward Message Serializer
-# -----------------------
+    class Meta:
+        model = WinnerHistory
+        fields = [
+            "id",
+            "user",             # full user info via SimpleUserSerializer
+            "game_title",
+            "reward_info",
+            "claimed_at",
+            "is_messaged",
+        ]
+
+    def get_reward_info(self, obj):
+        info = f"Prize: {obj.reward_description or 'N/A'}, Position: {obj.prize_position}"
+        return info
+
+    def get_is_messaged(self, obj):
+        return RewardChat.objects.filter(
+            creator=obj.game_history.creator, winner=obj.user
+        ).exists()
+
+
+
+
+
+# ---------------------------
+# Reward Message Serializer 
+# ---------------------------
 class RewardMessageSerializer(serializers.ModelSerializer):
-    sender_username = serializers.CharField(source='sender.username', read_only=True)
+    sender_username = serializers.SerializerMethodField()
     reward_chat_id = serializers.IntegerField(source='reward_chat.id', read_only=True)
-
-    
+    winner_history_id = serializers.IntegerField(source='winner_history.id', read_only=True)
 
     class Meta:
         model = RewardMessage
         fields = [
             "id",
-            "winner_history",
-            "reward_chat_id",
+            "message",
             "sender",
             "sender_username",
-            "message",
             "image",
             "created_at",
             "is_system_message",
+            "reward_chat_id",
+            "winner_history_id",
         ]
-        read_only_fields = ["id", "created_at", "sender", "sender_username", "is_system_message", "reward_chat_id"]
-        
+        read_only_fields = [
+            "id", "created_at", "sender", "sender_username",
+            "is_system_message", "reward_chat_id", "winner_history_id"
+        ]
+
+    def get_sender_username(self, obj):
+        if obj.is_system_message:
+            return obj.winner_history.user.username if obj.winner_history else "System"
+        return obj.sender.username if obj.sender else "Unknown"
 
     def validate(self, attrs):
-        wh = attrs.get("winner_history")
-        if wh:
-            now = timezone.now()
-            
-            # Stop messaging if reward already delivered
-            if wh.reward_delivered:
-                raise serializers.ValidationError(
-                    "Messaging is no longer allowed because the reward has been delivered."
-                )
+        request_user = self.context['request'].user
+        data = self.context['request'].data
+        game_history_id = data.get('game_history')
 
-            # Existing deadline check
-            allowed_until = wh.reward_delivery_deadline or wh.claim_deadline
-            if not allowed_until or now > allowed_until:
-                raise serializers.ValidationError("Messaging period has expired.")
+        if not game_history_id:
+            raise serializers.ValidationError({"game_history": "GameHistory must be provided."})
+
+        # Fetch the game history
+        try:
+            game_history = GameHistory.objects.get(id=game_history_id)
+        except GameHistory.DoesNotExist:
+            raise serializers.ValidationError({"game_history": "GameHistory not found."})
+
+        # Determine WinnerHistory
+        if request_user == game_history.creator:
+            # Creator sending → either use winner_id or auto-pick latest claimed
+            winner_id = data.get('winner_id')
+            if winner_id:
+                wh = WinnerHistory.objects.filter(game_history=game_history, user_id=winner_id).first()
+                if not wh:
+                    raise serializers.ValidationError({"winner_history": "WinnerHistory not found for this winner and game!"})
+            else:
+                # Auto-fetch latest claimed winner who hasn't received reward
+                wh = WinnerHistory.objects.filter(
+                    game_history=game_history,
+                    is_claimed=True,
+                    reward_received=False
+                ).order_by('-claimed_at').first()
+
+                if not wh:
+                    raise serializers.ValidationError({"winner_history": "No claimed winner available for messaging."})
+        else:
+            # Winner sending → their own WinnerHistory
+            wh = WinnerHistory.objects.filter(game_history=game_history, user=request_user).first()
+            if not wh:
+                raise serializers.ValidationError({"winner_history": "WinnerHistory not found for this user and game!"})
+
+        wh.refresh_from_db()
+        now = timezone.now()
+
+        # Messaging permission checks
+        if not wh.is_claimed:
+            raise serializers.ValidationError({"non_field_errors": ["Messaging not allowed until reward is claimed."]})
+        if wh.reward_delivery_deadline and now > wh.reward_delivery_deadline:
+            raise serializers.ValidationError({"non_field_errors": ["Messaging period expired."]})
+        if wh.reward_received:
+            raise serializers.ValidationError({"non_field_errors": ["Cannot send messages after reward confirmed."]})
+
+        # Get or create chat
+        chat, _ = RewardChat.objects.get_or_create(
+            creator=game_history.creator,
+            winner=wh.user,
+            defaults={'is_active': True}
+        )
+
+        if not chat.is_active:
+            raise serializers.ValidationError({"non_field_errors": ["Messaging is no longer allowed."]})
+
+        attrs['winner_history'] = wh
+        attrs['reward_chat'] = chat
         return attrs
 
     def create(self, validated_data):
         request = self.context.get("request")
         if request and request.user.is_authenticated:
-            validated_data["sender"] = request.user
-        return super().create(validated_data)
+            validated_data['sender'] = request.user
 
+        instance = super().create(validated_data)
 
+        # Deliver message & update chat status
+        receiver = instance.reward_chat.winner if instance.sender == instance.reward_chat.creator else instance.reward_chat.creator
+        if is_user_online(receiver):
+            instance.is_delivered = True
+            instance.save(update_fields=["is_delivered"])
 
-# -----------------------
-# Chat List Serializer
-# -----------------------
+        instance.reward_chat.last_message_status = "double" if instance.is_delivered else "single"
+        instance.reward_chat.save(update_fields=["last_message_status"])
+
+        return instance
+
+   
+# ---------------------------
+# Chat List Serializer (Fixed)
+# ---------------------------
 class ChatListSerializer(serializers.ModelSerializer):
     other_user = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
     last_message_time = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
-    last_message_status = serializers.SerializerMethodField()  # single/double tick
+    last_message_status = serializers.SerializerMethodField()
+    is_active = serializers.SerializerMethodField()
 
     class Meta:
         model = RewardChat
@@ -662,57 +762,62 @@ class ChatListSerializer(serializers.ModelSerializer):
             "last_message",
             "last_message_time",
             "unread_count",
-            "last_message_status"
+            "last_message_status",
+            "is_active",
         ]
 
     def get_other_user(self, obj):
         request_user = self.context["request"].user
         other = obj.winner if obj.creator == request_user else obj.creator
-        return SimpleUserSerializer(other, context=self.context).data
+        profile = getattr(other, "profile", None)
+        return {
+            "id": other.id,
+            "username": other.username,
+            "avatar": profile.avatar.url if profile and profile.avatar else None,
+            "is_online": is_user_online(other) if profile else False,
+        }
 
     def get_last_message(self, obj):
         last_msg = obj.messages.order_by("-created_at").first()
         if not last_msg:
-            return None
-        # Show preview for text or image
+            return "No messages yet"  # 👈 Show this only if no messages exist
         if last_msg.message:
-            return last_msg.message[:50]  # limit to first 50 chars
+            return last_msg.message[:50]  # Limit to first 50 chars
         elif last_msg.image:
             return "📷 Image"
-        return None
+        else:
+            return "No messages yet"
 
     def get_last_message_time(self, obj):
-        last_msg = obj.messages.order_by("-created_at").first()
+        last_msg = obj.messages.all().order_by("-created_at").first()
         return last_msg.created_at if last_msg else None
 
     def get_unread_count(self, obj):
         request_user = self.context["request"].user
-        # Count messages from the other user that are not read
-        return obj.messages.filter(
-            ~Q(sender=request_user),
-            is_read=False
-        ).count()
+        return obj.messages.exclude(sender=request_user).filter(is_read=False).count()
 
     def get_last_message_status(self, obj):
-        """
-        Return last message status for the logged-in user:
-        - "single" = delivered but not read
-        - "double" = read
-        - None = last message is from the logged-in user
-        """
+        request_user = self.context["request"].user
         last_msg = obj.messages.order_by("-created_at").first()
-        if not last_msg:
+
+        if not last_msg or last_msg.sender != request_user:
             return None
 
-        request_user = self.context["request"].user
-        if last_msg.sender == request_user:
-            return None  # we only show tick status for messages sent to the user
+        receiver = obj.winner if request_user == obj.creator else obj.creator
 
+        # Single / double / seen
         if last_msg.is_read:
+            return "seen"
+        elif last_msg.is_delivered:  # <-- use delivered flag
             return "double"
-        elif last_msg.is_delivered:
+        else:
             return "single"
-        return None
+
+
+    def get_is_active(self, obj):
+        return obj.is_active
+
+
 
 # -----------------------
 # Game Complaint Serializer

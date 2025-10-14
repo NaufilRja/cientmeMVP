@@ -9,7 +9,9 @@ from .views import (
     RewardMessageViewSet,
     GameComplaintViewSet,
     UnplayedGamesListView,
-    ChatListView
+    ChatListView,
+    ClaimedWinnerListView,     
+   
 
 )
 
@@ -55,4 +57,13 @@ urlpatterns = [
     
     path('unplayed/', UnplayedGamesListView.as_view(), name='unplayed-games'),
     path('reward-chat-list/', ChatListView.as_view(), name='reward-chat-list'),
+    
+    
+    # -----------------------
+    # Claimed Winners endpoints
+    # -----------------------
+    # For a specific game (frontend can show winner cards)
+    path('claimed-winners/', ClaimedWinnerListView.as_view(), name='claimed-winners'),
+
+    
 ]

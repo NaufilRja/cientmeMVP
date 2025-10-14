@@ -5,6 +5,7 @@ from django.utils.http import urlsafe_base64_decode
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from users.models import Profile
+from core.utils.user_online import is_user_online 
 
 
 
@@ -39,6 +40,9 @@ class ProfileSerializer(serializers.ModelSerializer):
         read_only=True
     )
     
+    is_online = serializers.SerializerMethodField()
+    last_online = serializers.DateTimeField(read_only=True)
+    
     class Meta:
         model = Profile
         fields = [
@@ -56,6 +60,8 @@ class ProfileSerializer(serializers.ModelSerializer):
             'engaged_tags',   
             'hidden_reels',
             'total_reach', 
+            'is_online',       # online status for chat list
+            'last_online',
             'created_at',   # match BaseModel
             'updated_at',
         ]
@@ -72,6 +78,8 @@ class ProfileSerializer(serializers.ModelSerializer):
             'hidden_reels',
             'created_at',
             'updated_at',
+            'is_online', 
+            'last_online'
         ]
     
     
@@ -83,6 +91,9 @@ class ProfileSerializer(serializers.ModelSerializer):
     def get_engaged_tags(self, obj):
         """Return list of engaged tag names."""
         return [tag.name for tag in obj.engaged_tags.all()]  # assumes Tag model has 'name' field
+    
+    def get_is_online(self, obj):
+        return is_user_online(obj.user)
 
 
 # -----------------------

@@ -2,16 +2,17 @@ from rest_framework import(viewsets, permissions, serializers,
 status, exceptions , generics, views
 )
 
-from django.db import models
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.conf import settings
 from django.core.exceptions import FieldError
-from django.db.models import OuterRef, Subquery, Count, Max, F, Q, IntegerField
+from django.db.models import Prefetch, OuterRef, Subquery, Count, Max, F, Q, IntegerField
+from django.db.models.functions import Coalesce
+
 from core.utils.auth import OptionalJWTAuthentication
-from core.pagination import StandardCursorPagination
+from core.pagination import StandardCursorPagination, ChatMessagePagination
 import logging
 
 from .services.game_fairness import GameFairness
@@ -25,7 +26,7 @@ from .models import (
 from .serializers import (
     GameSerializer, PublicGameSerializer, 
     GameSubmissionSerializer,WinningNumberSerializer, GameHistorySerializer, WinnerHistorySerializer, RewardMessageSerializer, GameComplaintSerializer, PublicGameHistorySerializer, PublicWinnerSerializer,
-    ChatListSerializer
+    ChatListSerializer, ClaimedWinnerSerializer
 )
 
 
@@ -581,117 +582,190 @@ class WinnerHistoryViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({"detail": "Reward receipt confirmed!"})        
 
 
+
+# ------------------------------------------------------
+# Claimed Winner List ViewSet for spesific and all games
+# -----------------------------------------------------
+class ClaimedWinnerListView(views.APIView):
+    """
+    Returns list of winners who claimed rewards.
+    - If `game_id` is provided → winners for that specific game.
+    - If no `game_id` → all winners across the creator's games.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        game_id = request.query_params.get("game_id")
+
+        # Base queryset: all claimed, unreceived rewards for this creator
+        winners = WinnerHistory.objects.filter(
+            game_history__creator=user,
+            is_claimed=True,
+            reward_received=False
+        ).order_by('-claimed_at')
+
+        # Filter by specific game if game_id provided
+        if game_id:
+            winners = winners.filter(game_history_id=game_id)
+
+        serializer = ClaimedWinnerSerializer(winners, many=True, context={"request": request})
+        return Response(serializer.data)
+
+
 # -----------------------
 # RewardMessage ViewSet
 # -----------------------
 class RewardMessageViewSet(viewsets.ModelViewSet):
     """
-    ViewSet to handle RewardMessage CRUD operations.
-
-    Features:
-    - Returns messages for the logged-in user (winner) or creator of the game.
-    - Supports optional filtering by reward_chat (specific chat thread).
-    - Supports optional filtering by system messages (is_system_message).
-    - Messages are ordered chronologically by creation time.
+    Handles RewardMessage CRUD with bidirectional chat (winner ↔ creator).
+    Messaging blocked after reward confirmed.
     """
     serializer_class = RewardMessageSerializer
     permission_classes = [permissions.IsAuthenticated]
-    pagination_class = StandardCursorPagination
-
-    
+    pagination_class = ChatMessagePagination
 
     def get_queryset(self):
-        """
-        Return RewardMessages for current user with optional filters:
-        - reward_chat
-        - is_system_message
-        """
         user = self.request.user
 
-        # Base queryset: messages where user is winner or game creator
-        queryset = RewardMessage.objects.filter(
+        reward_chat_id = self.request.query_params.get("reward_chat")
+        if not reward_chat_id:
+            return RewardMessage.objects.none()
+
+        # Fetch all messages for this chat
+        queryset = RewardMessage.objects.filter(reward_chat_id=reward_chat_id)
+
+        # Include only messages visible to the current user
+        # (creator/winner can see system messages too)
+        queryset = queryset.filter(
             Q(winner_history__user=user) | Q(winner_history__game_history__creator=user)
         )
 
-        # Filter by specific chat if provided
-        reward_chat_id = self.request.query_params.get("reward_chat")
-        if reward_chat_id:
-            queryset = queryset.filter(reward_chat_id=reward_chat_id)
-
-        # Filter by system messages if provided
+        # Optional: filter system messages if explicitly requested
         is_system = self.request.query_params.get("is_system_message")
         if is_system is not None:
-            if is_system.lower() == "true":
-                queryset = queryset.filter(is_system_message=True)
-            elif is_system.lower() == "false":
-                queryset = queryset.filter(is_system_message=False)
+            queryset = queryset.filter(is_system_message=(is_system.lower() == "true"))
 
+        # Mark unread messages as read
+        unread_qs = queryset.filter(~Q(sender=user), is_read=False)
+        if unread_qs.exists():
+            unread_qs.update(is_read=True)
+
+        # Oldest first
         return queryset.order_by("created_at")
 
+    def create(self, request, *args, **kwargs):
+        user = request.user
 
-    def perform_create(self, serializer):
-        """
-        Validate permission and assign sender before creating a message.
+        # Update last_online
+        if hasattr(user, "profile"):
+            user.profile.last_online = timezone.now()
+            user.profile.save(update_fields=["last_online"])
 
-        Only the winner or the creator of the game can send messages
-        for a given reward.
+        # Let the serializer handle winner_history validation and creation
+        response = super().create(request, *args, **kwargs)
 
-        Raises:
-            PermissionDenied: if the logged-in user is not allowed to send this message.
-        """
-        wh = serializer.validated_data.get("winner_history")
-        user = self.request.user
+        # response.data already has reward_chat_id from serializer
+        reward_chat_id = response.data.get("reward_chat_id")
 
-        if user != wh.user and user != wh.game_history.creator:
-            raise PermissionDenied("You are not allowed to send messages for this reward.")
-
-        serializer.save(sender=user)
-
+        return Response({
+            "detail": "Message sent successfully",
+            "reward_chat_id": reward_chat_id,
+            "message": response.data
+        })
 
 
-# --------------------------
-# Reward Chat List View
-# --------------------------
+    def update(self, request, *args, **kwargs):
+        raise exceptions.MethodNotAllowed("PUT", detail="Editing messages is not allowed.")
 
+    def partial_update(self, request, *args, **kwargs):
+        raise exceptions.MethodNotAllowed("PATCH", detail="Editing messages is not allowed.")
+
+    def destroy(self, request, *args, **kwargs):
+        raise exceptions.MethodNotAllowed("DELETE", detail="Deleting messages is not allowed.")
+
+
+
+
+# -----------------------
+# ChatListView
+# -----------------------
 class ChatListView(views.APIView):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = StandardCursorPagination
 
     def get(self, request):
         user = request.user
-        query = request.GET.get("q", "")
+        query = request.GET.get("q", "").strip()
 
-        # Base queryset: all chats where user is creator or winner
-        chats = RewardChat.objects.filter(Q(creator=user) | Q(winner=user)).prefetch_related(
-            "messages", "creator", "winner"
+        # -----------------------
+        # Remove duplicate RewardChats (keep earliest)
+        # -----------------------
+        unique_pairs = set()
+        duplicates = []
+
+        for chat in RewardChat.objects.all().only("id", "creator_id", "winner_id"):
+            key = tuple(sorted([chat.creator_id, chat.winner_id]))  # unique pair
+            if key in unique_pairs:
+                duplicates.append(chat.id)
+            else:
+                unique_pairs.add(key)
+
+        if duplicates:
+            RewardChat.objects.filter(id__in=duplicates).delete()
+
+        # -----------------------
+        # Base queryset — user involved as creator or winner
+        # -----------------------
+        chats = (
+            RewardChat.objects.filter(Q(creator=user) | Q(winner=user))
+            .prefetch_related("messages", "creator__profile", "winner__profile")
+            .annotate(last_message_time=Max("messages__created_at"))
         )
 
+        # -----------------------
+        # Mark messages delivered for this user
+        # -----------------------
+        RewardMessage.objects.filter(
+            reward_chat__in=chats,
+            is_delivered=False
+        ).exclude(sender=user).update(is_delivered=True)
+
+
+        # -----------------------
+        # Separate chats with and without messages
+        # -----------------------
+        chats_with_msg = chats.filter(last_message_time__isnull=False)
+        chats_without_msg = chats.filter(last_message_time__isnull=True)
+
+        # Combine (messages first, then empty)
+        chats = chats_with_msg.union(chats_without_msg).order_by("-last_message_time", "-id")
+
+        # -----------------------
         # Search filter
+        # -----------------------
         if query:
             chats = chats.filter(
-                Q(creator__username__icontains=query) |
-                Q(winner__username__icontains=query)
+                Q(creator__username__icontains=query)
+                | Q(winner__username__icontains=query)
             )
 
-        # Subquery for unread messages count
-        unread_subquery = RewardMessage.objects.filter(
-            reward_chat=OuterRef('pk')
-        ).exclude(sender=user).values('reward_chat').annotate(
-            count=Count('id')
-        ).values('count')
-
-        # Annotate queryset with unread_count and last_message_time
-        chats = chats.annotate(
-            unread_count=Subquery(unread_subquery, output_field=IntegerField()),
-            last_message_time=Max('messages__created_at')
-        ).order_by('-unread_count', F('last_message_time').desc(nulls_last=True))
-
-        # Pagination (now works because chats is still a QuerySet)
+        # -----------------------
+        # Pagination
+        # -----------------------
         paginator = self.pagination_class()
         paginated_chats = paginator.paginate_queryset(chats, request)
 
-        serializer = ChatListSerializer(paginated_chats, many=True, context={'request': request})
+        # -----------------------
+        # Serialize
+        # -----------------------
+        serializer = ChatListSerializer(
+            paginated_chats, many=True, context={"request": request}
+        )
+
         return paginator.get_paginated_response(serializer.data)
+
+
 
 # -----------------------
 # Game Complaint ViewSet

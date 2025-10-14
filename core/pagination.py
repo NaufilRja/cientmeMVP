@@ -17,5 +17,18 @@ class StandardCursorPagination(CursorPagination):
             'has_next': bool(self.get_next_link()),
             'results': data
         })
+        
+        
+class ChatMessagePagination(CursorPagination):
+    page_size = 50  # fetch 50 messages at a time
+    ordering = 'created_at'  # oldest first for chat display
+
+    def get_paginated_response(self, data):
+        return Response({
+            'next': self.get_next_link(),
+            'previous': self.get_previous_link(),
+            'has_next': bool(self.get_next_link()),
+            'results': data
+        })        
 
 
